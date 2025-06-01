@@ -4,7 +4,7 @@ let
   user = "nixos";
   password = "nixos";
   SSID = "Das Internetz";
-  wifiPassword = builtins.readFile /etc/nixos/secrets/wifi-password;
+  wifiPassword = lib.strings.removeSuffix "\n" (builtins.readFile /etc/nixos/secrets/wifi-password);
   interface = "wlan0";
   hostname = "nixos-pi1";
 in {
