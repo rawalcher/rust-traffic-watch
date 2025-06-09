@@ -1,0 +1,9 @@
+[package]
+name = "jetson-receiver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+bincode = { workspace = true }
+shared = { path = "../shared" }
