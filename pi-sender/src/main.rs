@@ -3,26 +3,39 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration};
+use tracing::{info, debug, error, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Pi Sender starting...");
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
+    info!("Pi Sender starting...");
 
     let jetson_addr = "localhost:8080"; // TODO change
     let mut stream = TcpStream::connect(jetson_addr).await?;
-    println!("Connected to Jetson at {}", jetson_addr);
+    info!("Connected to Jetson at {}", jetson_addr);
 
-    let mut sequence_id = 0u64;
+    let mut sequence_id = 1u64;
 
     loop {
+        let frame_data = match load_frame_from_image(sequence_id) {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Error loading frame {}: {}", sequence_id, e);
+                break;
+            }
+        };
+
         let frame = FrameMessage {
             sequence_id,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)?
                 .as_millis() as u64,
-            frame_data: create_test_frame_data(sequence_id),
-            width: 640,
-            height: 480,
+            frame_data, 
+            width: 1920,
+            height: 1080,
         };
 
         let serialized = bincode::serialize(&frame)?;
@@ -32,29 +45,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream.write_all(&serialized).await?;
         stream.flush().await?;
 
-        println!("Sent frame {} ({} bytes)", sequence_id, frame_size);
+        info!("Sent frame {} ({} bytes total, {} bytes image)",
+                sequence_id, frame_size, frame.frame_data.len());
 
+        // sends every frame
         sequence_id += 1;
-
         sleep(Duration::from_millis(100)).await;
 
-        if sequence_id >= 50 {
+        if sequence_id > 999 {
+            info!("Reached end of sequence (frame 999)");
             break;
         }
     }
 
-    println!("Pi Sender finished");
+    info!("Pi Sender finished");
     Ok(())
 }
 
-fn create_test_frame_data(sequence_id: u64) -> Vec<u8> {
-    
-    let size = 640 * 480 * 3;
-    let mut data = vec![0u8; size];
+fn load_frame_from_image(frame_number: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use tracing::debug;
 
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte = ((i as u64 + sequence_id) % 256) as u8;
-    }
-
-    data
+    let filename = format!("pi-sender/sample/seq3-drone_{:07}.jpg", frame_number);
+    let image_bytes = std::fs::read(&filename)?;
+    debug!("Loaded frame {} ({} bytes)", frame_number, image_bytes.len());
+    Ok(image_bytes)
 }
