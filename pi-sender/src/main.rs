@@ -1,72 +1,172 @@
-use shared::FrameMessage;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use tokio::time::{sleep, Duration};
-use tracing::{info, debug, error, warn};
+use shared::{
+    current_timestamp_micros, receive_message, send_message, send_result_to_controller,
+    ControlMessage, Detection, ExperimentConfig, ExperimentMode, InferenceResult, NetworkMessage,
+    TimingPayload,
+};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{sleep, Duration, Instant};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("Pi Sender starting...");
 
-    info!("Pi Sender starting...");
+    let listener = TcpListener::bind("0.0.0.0:8080").await?;
+    println!("Listening for controller on port 8080");
 
-    let jetson_addr = "localhost:8080"; // TODO change
-    let mut stream = TcpStream::connect(jetson_addr).await?;
-    info!("Connected to Jetson at {}", jetson_addr);
+    let should_shutdown = Arc::new(AtomicBool::new(false));
 
-    let mut sequence_id = 1u64;
+    while !should_shutdown.load(Ordering::Relaxed) {
+        let (mut stream, addr) = listener.accept().await?;
+        println!("Controller connected from: {}", addr);
 
-    loop {
-        let frame_data = match load_frame_from_image(sequence_id) {
-            Ok(data) => data,
-            Err(e) => {
-                error!("Error loading frame {}: {}", sequence_id, e);
+        let message = receive_message::<NetworkMessage>(&mut stream).await?;
+
+        match message {
+            NetworkMessage::Control(ControlMessage::StartExperiment { config }) => {
+                println!(
+                    "Starting experiment: {} in mode {:?}",
+                    config.experiment_id, config.mode
+                );
+
+                match config.mode {
+                    ExperimentMode::LocalOnly => {
+                        run_local_experiment(config).await?;
+                    }
+                    ExperimentMode::Offload => {
+                        run_offload_experiment(config).await?;
+                    }
+                }
+            }
+            NetworkMessage::Control(ControlMessage::Shutdown) => {
+                should_shutdown.store(true, Ordering::Relaxed);
                 break;
             }
-        };
-
-        let frame = FrameMessage {
-            sequence_id,
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)?
-                .as_millis() as u64,
-            frame_data, 
-            width: 1920,
-            height: 1080,
-        };
-
-        let serialized = bincode::serialize(&frame)?;
-        let frame_size = serialized.len() as u32;
-
-        stream.write_all(&frame_size.to_le_bytes()).await?;
-        stream.write_all(&serialized).await?;
-        stream.flush().await?;
-
-        info!("Sent frame {} ({} bytes total, {} bytes image)",
-                sequence_id, frame_size, frame.frame_data.len());
-
-        // sends every frame
-        sequence_id += 1;
-        sleep(Duration::from_millis(100)).await;
-
-        if sequence_id > 999 {
-            info!("Reached end of sequence (frame 999)");
-            break;
+            _ => {}
         }
     }
 
-    info!("Pi Sender finished");
+    println!("Pi Sender stopped");
     Ok(())
 }
 
-fn load_frame_from_image(frame_number: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    use tracing::debug;
+async fn run_local_experiment(
+    config: ExperimentConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("Running LOCAL experiment - Pi processes frames and sends results to controller");
 
+    let experiment_start = Instant::now();
+    let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
+    let mut sequence_id = 1u64;
+
+    while experiment_start.elapsed().as_secs() < config.duration_seconds {
+        let mut timing = TimingPayload::new(sequence_id);
+
+        let frame_data = load_frame_from_image(sequence_id)?;
+        timing.add_frame_data(frame_data, 1920, 1080);
+
+        let inference_result = process_locally(&timing, &config.model_name).await?;
+
+        send_result_to_controller(&timing, inference_result).await?;
+
+        println!("Processed frame {} locally", sequence_id);
+        sequence_id += 1;
+
+        if sequence_id > 900 {
+            sequence_id = 1;
+        }
+
+        sleep(frame_interval).await;
+    }
+
+    Ok(())
+}
+
+async fn run_offload_experiment(
+    config: ExperimentConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("Running OFFLOAD experiment - Pi sends frames to Jetson");
+
+    let jetson_addr = "localhost:9092";
+    let mut jetson_stream = TcpStream::connect(jetson_addr).await?;
+    println!("Connected to Jetson at {}", jetson_addr);
+
+    let experiment_start = Instant::now();
+    let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
+    let mut sequence_id = 1u64;
+
+    while experiment_start.elapsed().as_secs() < config.duration_seconds {
+        let mut timing = TimingPayload::new(sequence_id);
+
+        let frame_data = load_frame_from_image(sequence_id)?;
+        timing.add_frame_data(frame_data, 1920, 1080);
+
+        timing.pi_sent_to_jetson = Some(current_timestamp_micros());
+
+        let frame_message = NetworkMessage::Frame(timing);
+        send_message(&mut jetson_stream, &frame_message).await?;
+
+        println!("Sent frame {} to Jetson", sequence_id);
+        sequence_id += 1;
+
+        if sequence_id > 900 {
+            sequence_id = 1;
+        }
+
+        sleep(frame_interval).await;
+    }
+
+    Ok(())
+}
+
+async fn process_locally(
+    timing: &TimingPayload,
+    model_name: &str,
+) -> Result<InferenceResult, Box<dyn std::error::Error + Send + Sync>> {
+    let (detections, actual_processing_time_us) = get_mock_pi_inference_data(model_name).await;
+
+    Ok(InferenceResult {
+        sequence_id: timing.sequence_id,
+        detections,
+        confidence: 0.89,
+        processing_time_us: actual_processing_time_us,
+    })
+}
+
+async fn get_mock_pi_inference_data(model_name: &str) -> (Vec<Detection>, u64) {
+    let processing_start = std::time::Instant::now();
+
+    let mock_time_us = match model_name {
+        "yolov5n" => 50_000,
+        "yolov5s" => 100_000,
+        "yolov5m" => 200_000,
+        "yolov5l" => 300_000,
+        "yolov5x" => 500_000,
+        _ => 150_000,
+    };
+
+    sleep(Duration::from_micros(mock_time_us)).await;
+
+    let detections = vec![
+        Detection {
+            class: "person".to_string(),
+            bbox: [150.0, 100.0, 30.0, 80.0],
+            confidence: 0.92,
+        },
+        Detection {
+            class: "car".to_string(),
+            bbox: [100.0, 200.0, 50.0, 30.0],
+            confidence: 0.85,
+        },
+    ];
+
+    (detections, processing_start.elapsed().as_micros() as u64)
+}
+
+fn load_frame_from_image(
+    frame_number: u64,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let filename = format!("pi-sender/sample/seq3-drone_{:07}.jpg", frame_number);
-    let image_bytes = std::fs::read(&filename)?;
-    debug!("Loaded frame {} ({} bytes)", frame_number, image_bytes.len());
-    Ok(image_bytes)
+    Ok(std::fs::read(&filename)?)
 }

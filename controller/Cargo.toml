@@ -1,8 +1,9 @@
 [package]
-name = "pi-sender"
+name = "controller"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 tokio = { workspace = true }
 shared = { path = "../shared" }
+csv = "1.3"
