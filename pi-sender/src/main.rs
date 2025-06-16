@@ -1,7 +1,7 @@
 use shared::{
     current_timestamp_micros, receive_message, send_message, send_result_to_controller,
-    ControlMessage, Detection, ExperimentConfig, ExperimentMode, InferenceResult, NetworkMessage,
-    TimingPayload,
+    ControlMessage, ExperimentConfig, ExperimentMode, InferenceResult, NetworkMessage,
+    TimingPayload, PersistentPythonDetector, perform_python_inference_with_counts,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -56,6 +56,12 @@ async fn run_local_experiment(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Running LOCAL experiment - Pi processes frames and sends results to controller");
 
+    // Initialize Python detector once for the experiment
+    let mut detector = PersistentPythonDetector::new(config.model_name.clone())
+        .map_err(|e| format!("Failed to initialize Python detector: {}", e))?;
+
+    println!("Python detector initialized with model: {}", config.model_name);
+
     let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
@@ -66,11 +72,21 @@ async fn run_local_experiment(
         let frame_data = load_frame_from_image(sequence_id)?;
         timing.add_frame_data(frame_data, 1920, 1080);
 
-        let inference_result = process_locally(&timing, &config.model_name).await?;
+        // Use actual Python inference instead of mock
+        let (inference_result, counts) = process_locally_with_python(&timing, &mut detector).await
+            .map_err(|e| format!("Python inference failed: {}", e))?;
 
+        let processing_time = inference_result.processing_time_us;
         send_result_to_controller(&timing, inference_result).await?;
 
-        println!("Processed frame {} locally", sequence_id);
+        println!(
+            "Processed frame {} locally: {} vehicles, {} pedestrians, {:.1}ms",
+            sequence_id,
+            counts.total_vehicles,
+            counts.pedestrians,
+            processing_time as f64 / 1000.0
+        );
+
         sequence_id += 1;
 
         if sequence_id > 900 {
@@ -79,6 +95,10 @@ async fn run_local_experiment(
 
         sleep(frame_interval).await;
     }
+
+    // Cleanup detector
+    detector.shutdown().map_err(|e| format!("Failed to shutdown detector: {}", e))?;
+    println!("Python detector shut down");
 
     Ok(())
 }
@@ -120,48 +140,12 @@ async fn run_offload_experiment(
     Ok(())
 }
 
-async fn process_locally(
+async fn process_locally_with_python(
     timing: &TimingPayload,
-    model_name: &str,
-) -> Result<InferenceResult, Box<dyn std::error::Error + Send + Sync>> {
-    let (detections, actual_processing_time_us) = get_mock_pi_inference_data(model_name).await;
-
-    Ok(InferenceResult {
-        sequence_id: timing.sequence_id,
-        detections,
-        confidence: 0.89,
-        processing_time_us: actual_processing_time_us,
-    })
-}
-
-async fn get_mock_pi_inference_data(model_name: &str) -> (Vec<Detection>, u64) {
-    let processing_start = std::time::Instant::now();
-
-    let mock_time_us = match model_name {
-        "yolov5n" => 50_000,
-        "yolov5s" => 100_000,
-        "yolov5m" => 200_000,
-        "yolov5l" => 300_000,
-        "yolov5x" => 500_000,
-        _ => 150_000,
-    };
-
-    sleep(Duration::from_micros(mock_time_us)).await;
-
-    let detections = vec![
-        Detection {
-            class: "person".to_string(),
-            bbox: [150.0, 100.0, 30.0, 80.0],
-            confidence: 0.92,
-        },
-        Detection {
-            class: "car".to_string(),
-            bbox: [100.0, 200.0, 50.0, 30.0],
-            confidence: 0.85,
-        },
-    ];
-
-    (detections, processing_start.elapsed().as_micros() as u64)
+    detector: &mut PersistentPythonDetector,
+) -> Result<(InferenceResult, shared::ObjectCounts), String> {
+    // This function now uses the actual Python detector
+    perform_python_inference_with_counts(timing, detector).await
 }
 
 fn load_frame_from_image(
