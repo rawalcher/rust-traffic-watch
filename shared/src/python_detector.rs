@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use serde::{Deserialize, Serialize};
 use crate::types::*;
+use log::{debug, error};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PythonDetectionResult {
@@ -12,7 +13,7 @@ pub struct PythonDetectionResult {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PythonErrorResult {
+struct PythonErrorResult {
     pub error: String,
     pub detections: Vec<Detection>,
     pub confidence: f32,
@@ -22,11 +23,12 @@ pub struct PythonErrorResult {
 
 pub struct PersistentPythonDetector {
     process: Child,
-    model_name: String,
 }
 
 impl PersistentPythonDetector {
     pub fn new(model_name: String) -> Result<Self, String> {
+        debug!("Starting Python detector with model: {}", model_name);
+
         let mut process = Command::new(".venv/bin/python")
             .arg("python/python_inference.py")
             .arg(&model_name)
@@ -34,22 +36,38 @@ impl PersistentPythonDetector {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to spawn Python process: {}", e))?;
+            .map_err(|e| {
+                error!("Failed to spawn Python process: {}", e);
+                format!("Failed to spawn Python process: {}", e)
+            })?;
 
+        // Wait for ready signal
         let stdout = process.stdout.as_mut().unwrap();
         let mut reader = BufReader::new(stdout);
         let mut ready_line = String::new();
-        reader.read_line(&mut ready_line)
-            .map_err(|e| format!("Failed to read ready signal: {}", e))?;
 
-        if !ready_line.trim().eq("READY") {
-            return Err(format!("Expected READY signal, got: {}", ready_line.trim()));
+        reader.read_line(&mut ready_line)
+            .map_err(|e| {
+                error!("Failed to read ready signal: {}", e);
+                format!("Failed to read ready signal: {}", e)
+            })?;
+
+        if ready_line.trim() != "READY" {
+            let err = format!("Expected READY signal, got: {}", ready_line.trim());
+            error!("{}", err);
+            return Err(err);
         }
 
-        Ok(Self { process, model_name })
+        debug!("Python detector ready");
+        Ok(Self { process })
     }
 
     pub fn detect_objects(&mut self, image_bytes: &[u8]) -> Result<PythonDetectionResult, String> {
+        self.send_image(image_bytes)?;
+        self.receive_response()
+    }
+
+    fn send_image(&mut self, image_bytes: &[u8]) -> Result<(), String> {
         let stdin = self.process.stdin.as_mut().unwrap();
 
         let length = image_bytes.len() as u32;
@@ -62,7 +80,12 @@ impl PersistentPythonDetector {
         stdin.flush()
             .map_err(|e| format!("Failed to flush stdin: {}", e))?;
 
+        Ok(())
+    }
+
+    fn receive_response(&mut self) -> Result<PythonDetectionResult, String> {
         let stdout = self.process.stdout.as_mut().unwrap();
+
         let mut length_buf = [0u8; 4];
         stdout.read_exact(&mut length_buf)
             .map_err(|e| format!("Failed to read response length: {}", e))?;
@@ -76,25 +99,29 @@ impl PersistentPythonDetector {
         let response_str = String::from_utf8(response_buf)
             .map_err(|e| format!("Invalid UTF-8 in response: {}", e))?;
 
-        match serde_json::from_str::<PythonDetectionResult>(&response_str) {
-            Ok(result) => Ok(result),
-            Err(_) => {
-                match serde_json::from_str::<PythonErrorResult>(&response_str) {
-                    Ok(error_result) => Err(error_result.error),
-                    Err(parse_err) => Err(format!("Failed to parse response: {}, Data: {}", parse_err, response_str)),
-                }
-            }
-        }
+        // Try to parse as success first, then as error
+        serde_json::from_str::<PythonDetectionResult>(&response_str)
+            .or_else(|_| {
+                serde_json::from_str::<PythonErrorResult>(&response_str)
+                    .map_err(|parse_err| format!("Failed to parse response: {}", parse_err))
+                    .and_then(|error_result| Err(error_result.error))
+            })
     }
 
     pub fn shutdown(&mut self) -> Result<(), String> {
+        debug!("Shutting down Python detector");
+
         if let Some(stdin) = self.process.stdin.take() {
             drop(stdin);
         }
 
         self.process.wait()
-            .map_err(|e| format!("Failed to wait for process: {}", e))?;
+            .map_err(|e| {
+                error!("Failed to wait for process: {}", e);
+                format!("Failed to wait for process: {}", e)
+            })?;
 
+        debug!("Python detector shut down");
         Ok(())
     }
 }

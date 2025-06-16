@@ -1,4 +1,6 @@
+use std::error;
 use csv::Writer;
+use log::{debug, error, info};
 use shared::{
     current_timestamp_micros, receive_message, send_message, ControlMessage, ExperimentConfig,
     ExperimentMode, NetworkMessage, ProcessingResult,
@@ -8,11 +10,23 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("Experiment Controller starting...");
+async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    if env::var("RUST_LOG").is_err() {
+        unsafe { env::set_var("RUST_LOG", "info"); }
+    }
+    env_logger::init();
+
+    info!("Experiment Controller starting...");
 
     let args: Vec<String> = env::args().collect();
-    let model_name = "yolov5s".to_string();
+
+    let model_name = if let Some(model_arg) = args.iter().find(|arg| arg.starts_with("--model=")) {
+        model_arg.strip_prefix("--model=").unwrap().to_string()
+    } else {
+        "yolov5s".to_string()
+    };
+
+    info!("Using model: {}", model_name);
 
     let modes = if args.contains(&"--local".to_string()) {
         vec![ExperimentMode::LocalOnly]
@@ -22,16 +36,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         vec![ExperimentMode::LocalOnly, ExperimentMode::Offload]
     };
 
-    for mode in modes {
+    for mode in &modes {
         let experiment_id = format!("{:?}_{}", mode, model_name);
-        println!("\n=== Starting experiment: {} ===", experiment_id);
+        info!("Starting experiment: {}", experiment_id);
 
-        let config = ExperimentConfig::new(experiment_id.clone(), mode, model_name.clone());
+        let config = ExperimentConfig::new(experiment_id.clone(), mode.clone(), model_name.clone());
 
         let results = run_experiment(config).await?;
         generate_analysis_csv(&results, &experiment_id)?;
 
-        println!(
+        info!(
             "Experiment {} complete. Processed {} frames",
             experiment_id,
             results.len()
@@ -40,19 +54,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sleep(Duration::from_secs(2)).await;
     }
 
-    println!("\nAll experiments complete!");
+    info!("All experiments complete!");
     Ok(())
 }
 
 async fn run_experiment(
     config: ExperimentConfig,
-) -> Result<Vec<ProcessingResult>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
     let listener = TcpListener::bind("0.0.0.0:9090").await?;
-    println!("Controller listening on port 9090");
+    debug!("Listening on port 9090");
 
     let pi_addr = "localhost:8080";
     let mut pi_stream = TcpStream::connect(pi_addr).await?;
-    println!("Connected to Pi");
+    info!("Connected to Pi");
 
     if matches!(config.mode, ExperimentMode::Offload) {
         let jetson_addr = "localhost:9092";
@@ -61,14 +75,14 @@ async fn run_experiment(
             config: config.clone(),
         });
         send_message(&mut jetson_stream, &control_message).await?;
-        println!("Sent config to Jetson");
+        info!("Connected to Jetson and sent config");
     }
 
     let control_message = NetworkMessage::Control(ControlMessage::StartExperiment {
         config: config.clone(),
     });
     send_message(&mut pi_stream, &control_message).await?;
-    println!("Sent experiment config to Pi");
+    debug!("Sent experiment config to Pi");
 
     let mut results = Vec::new();
     let experiment_start = Instant::now();
@@ -77,14 +91,14 @@ async fn run_experiment(
         tokio::select! {
             accept_result = listener.accept() => {
                 if let Ok((mut stream, addr)) = accept_result {
-                    println!("Received connection from {}", addr);
+                    debug!("Received connection from {}", addr);
 
                     if let Ok(message) = receive_message::<ControlMessage>(&mut stream).await {
                         if let ControlMessage::ProcessingResult(mut result) = message {
                             result.timing.controller_received = Some(current_timestamp_micros());
                             results.push(result);
 
-                            println!("Received result for frame {}", results.len());
+                            debug!("Received result for frame {}", results.len());
                         }
                     }
                 }
@@ -97,6 +111,7 @@ async fn run_experiment(
 
     let shutdown_message = NetworkMessage::Control(ControlMessage::Shutdown);
     let _ = send_message(&mut pi_stream, &shutdown_message).await;
+    debug!("Sent shutdown to Pi");
 
     Ok(results)
 }
@@ -104,13 +119,17 @@ async fn run_experiment(
 fn generate_analysis_csv(
     results: &[ProcessingResult],
     experiment_id: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     if results.is_empty() {
+        debug!("No results to save for experiment {}", experiment_id);
         return Ok(());
     }
 
     let filename = format!("experiment_{}_analysis.csv", experiment_id);
-    let mut writer = Writer::from_path(&filename)?;
+    let mut writer = Writer::from_path(&filename).map_err(|e| {
+        error!("Failed to create CSV file {}: {}", filename, e);
+        e
+    })?;
 
     writer.write_record(&[
         "sequence_id",
@@ -182,6 +201,6 @@ fn generate_analysis_csv(
     }
 
     writer.flush()?;
-    println!("Analysis saved to {}", filename);
+    info!("Analysis saved to {}", filename);
     Ok(())
 }

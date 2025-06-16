@@ -9,123 +9,118 @@ from PIL import Image
 
 class PersistentPiInferenceServer:
     def __init__(self, model_name='yolov5s'):
-        # Load model once at startup
+        self.setup_device()
+
         self.model = torch.hub.load('ultralytics/yolov5', model_name, pretrained=True, trust_repo=True)
         self.model.eval()
-        torch.set_num_threads(1)
 
-        # Traffic classes from COCO
-        self.traffic_classes = {0, 1, 2, 3, 5, 6, 7}  # person, bicycle, car, motorcycle, bus, train, truck
+        if self.device.type == 'cuda':
+            self.model = self.model.to(self.device)
+            torch.backends.cudnn.benchmark = True
+        else:
+            torch.set_num_threads(1)
 
-        # Signal ready
+        self.traffic_classes = {0, 1, 2, 3, 5, 6, 7}
+        self.class_mapping = {
+            'car': 'cars', 'truck': 'trucks', 'bus': 'buses',
+            'motorcycle': 'motorcycles', 'bicycle': 'bicycles', 'person': 'pedestrians'
+        }
+        self.vehicle_classes = {'car', 'truck', 'bus', 'motorcycle', 'bicycle'}
+
         print("READY", flush=True)
 
+    def setup_device(self):
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        else:
+            self.device = torch.device('cpu')
+
     def process_frame(self, image_bytes):
-        """Process single frame and return results"""
         start_time = time.time()
 
-        # Load image from bytes
         image = Image.open(io.BytesIO(image_bytes))
 
-        # Inference
-        with torch.no_grad():
-            results = self.model(image)
+        if self.device.type == 'cuda':
+            with torch.cuda.amp.autocast():
+                with torch.no_grad():
+                    results = self.model(image)
+        else:
+            with torch.no_grad():
+                results = self.model(image)
 
-        # Extract detections
-        detections = []
         df = results.pandas().xyxy[0]
+        traffic_df = df[df['class'].isin(self.traffic_classes)]
 
-        for _, row in df.iterrows():
-            if int(row['class']) in self.traffic_classes:
-                detections.append({
-                    'class': row['name'],
-                    'bbox': [float(row['xmin']), float(row['ymin']),
-                            float(row['xmax'] - row['xmin']), float(row['ymax'] - row['ymin'])],
-                    'confidence': float(row['confidence'])
-                })
+        detections = [
+            {
+                'class': row['name'],
+                'bbox': [float(row['xmin']), float(row['ymin']),
+                         float(row['xmax'] - row['xmin']), float(row['ymax'] - row['ymin'])],
+                'confidence': float(row['confidence'])
+            }
+            for _, row in traffic_df.iterrows()
+        ]
 
-        # Count objects
-        counts = {'cars': 0, 'trucks': 0, 'buses': 0, 'motorcycles': 0,
-                 'bicycles': 0, 'pedestrians': 0, 'total_vehicles': 0, 'total_objects': len(detections)}
+        counts = {key: 0 for key in self.class_mapping.values()}
+        counts.update({'total_vehicles': 0, 'total_objects': len(detections)})
 
         for det in detections:
             obj_class = det['class']
-            if obj_class == 'car':
-                counts['cars'] += 1
-                counts['total_vehicles'] += 1
-            elif obj_class == 'truck':
-                counts['trucks'] += 1
-                counts['total_vehicles'] += 1
-            elif obj_class == 'bus':
-                counts['buses'] += 1
-                counts['total_vehicles'] += 1
-            elif obj_class == 'motorcycle':
-                counts['motorcycles'] += 1
-                counts['total_vehicles'] += 1
-            elif obj_class == 'bicycle':
-                counts['bicycles'] += 1
-                counts['total_vehicles'] += 1
-            elif obj_class == 'person':
-                counts['pedestrians'] += 1
+            if obj_class in self.class_mapping:
+                counts[self.class_mapping[obj_class]] += 1
+                if obj_class in self.vehicle_classes:
+                    counts['total_vehicles'] += 1
 
         processing_time_us = int((time.time() - start_time) * 1_000_000)
+        max_confidence = max((d['confidence'] for d in detections), default=0.0)
 
         return {
             'detections': detections,
-            'confidence': max([d['confidence'] for d in detections]) if detections else 0.0,
+            'confidence': max_confidence,
             'processing_time_us': processing_time_us,
             'counts': counts
         }
 
+    def send_response(self, data):
+        json_data = json.dumps(data).encode('utf-8')
+        sys.stdout.buffer.write(struct.pack('<I', len(json_data)))
+        sys.stdout.buffer.write(json_data)
+        sys.stdout.buffer.flush()
+
     def run_server(self):
-        """Main server loop - reads frames and processes them"""
+        empty_counts = {key: 0 for key in self.class_mapping.values()}
+        empty_counts.update({'total_vehicles': 0, 'total_objects': 0})
+
         while True:
             try:
-                # Read frame length (4 bytes, little endian)
                 length_bytes = sys.stdin.buffer.read(4)
                 if len(length_bytes) != 4:
                     break
 
                 frame_length = struct.unpack('<I', length_bytes)[0]
-
-                # Read frame data
                 frame_data = sys.stdin.buffer.read(frame_length)
                 if len(frame_data) != frame_length:
                     break
 
-                # Process frame
                 result = self.process_frame(frame_data)
-
-                # Send result
-                result_json = json.dumps(result)
-                result_bytes = result_json.encode('utf-8')
-
-                # Send result length + result data
-                sys.stdout.buffer.write(struct.pack('<I', len(result_bytes)))
-                sys.stdout.buffer.write(result_bytes)
-                sys.stdout.buffer.flush()
+                self.send_response(result)
 
             except Exception as e:
-                # Send error response
                 error_result = {
                     'error': str(e),
                     'detections': [],
                     'confidence': 0.0,
                     'processing_time_us': 0,
-                    'counts': {'cars': 0, 'trucks': 0, 'buses': 0, 'motorcycles': 0,
-                              'bicycles': 0, 'pedestrians': 0, 'total_vehicles': 0, 'total_objects': 0}
+                    'counts': empty_counts
                 }
-                error_json = json.dumps(error_result)
-                error_bytes = error_json.encode('utf-8')
+                self.send_response(error_result)
 
-                sys.stdout.buffer.write(struct.pack('<I', len(error_bytes)))
-                sys.stdout.buffer.write(error_bytes)
-                sys.stdout.buffer.flush()
 
 def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else 'yolov5s'
     server = PersistentPiInferenceServer(model_name)
     server.run_server()
+
 
 if __name__ == "__main__":
     main()

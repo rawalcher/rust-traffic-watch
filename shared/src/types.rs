@@ -74,7 +74,6 @@ pub struct ObjectCounts {
     pub pedestrians: u32,
     pub total_vehicles: u32,
     pub total_objects: u32,
-    pub processing_time_us: ()
 }
 
 impl TimingPayload {
