@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 use log::{info, debug, error};
+use shared::constants::{jetson_full_address, pi_bind_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
@@ -19,8 +20,8 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     info!("Pi Sender starting...");
 
-    let listener = TcpListener::bind("0.0.0.0:8080").await?;
-    info!("Listening on port 8080");
+    let listener = TcpListener::bind(&pi_bind_address()).await?;
+    info!("Listening on port {}", PI_PORT);
 
     let should_shutdown = Arc::new(AtomicBool::new(false));
 
@@ -82,7 +83,7 @@ async fn run_local_experiment(
         let mut timing = TimingPayload::new(sequence_id);
 
         let frame_data = load_frame_from_image(sequence_id)?;
-        timing.add_frame_data(frame_data, 1920, 1080);
+        timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
         let (inference_result, counts) = process_locally_with_python(&timing, &mut detector).await
             .map_err(|e| {
@@ -103,7 +104,7 @@ async fn run_local_experiment(
 
         sequence_id += 1;
 
-        if sequence_id > 900 {
+        if sequence_id > MAX_FRAME_SEQUENCE {
             sequence_id = 1;
         }
 
@@ -125,9 +126,8 @@ async fn run_offload_experiment(
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("Running OFFLOAD experiment - Pi sends frames to Jetson");
 
-    let jetson_addr = "localhost:9092";
-    let mut jetson_stream = TcpStream::connect(jetson_addr).await?;
-    info!("Connected to Jetson at {}", jetson_addr);
+    let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
+    info!("Connected to Jetson at {}", jetson_full_address());
 
     let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
@@ -147,7 +147,7 @@ async fn run_offload_experiment(
         debug!("Sent frame {} to Jetson", sequence_id);
         sequence_id += 1;
 
-        if sequence_id > 900 {
+        if sequence_id > MAX_FRAME_SEQUENCE {
             sequence_id = 1;
         }
 

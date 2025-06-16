@@ -8,6 +8,7 @@ use shared::{
 use std::env;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
+use shared::constants::{controller_bind_address, jetson_full_address, pi_full_address, CONTROLLER_PORT, DEFAULT_MODEL};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
@@ -23,7 +24,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let model_name = if let Some(model_arg) = args.iter().find(|arg| arg.starts_with("--model=")) {
         model_arg.strip_prefix("--model=").unwrap().to_string()
     } else {
-        "yolov5s".to_string()
+        DEFAULT_MODEL.to_string()
     };
 
     info!("Using model: {}", model_name);
@@ -61,16 +62,15 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 async fn run_experiment(
     config: ExperimentConfig,
 ) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
-    let listener = TcpListener::bind("0.0.0.0:9090").await?;
-    debug!("Listening on port 9090");
+    let listener = TcpListener::bind(controller_bind_address()).await?;
+    debug!("Listening on port {}", CONTROLLER_PORT);
 
-    let pi_addr = "localhost:8080";
-    let mut pi_stream = TcpStream::connect(pi_addr).await?;
+    let mut pi_stream = TcpStream::connect(pi_full_address()).await?;
     info!("Connected to Pi");
 
     if matches!(config.mode, ExperimentMode::Offload) {
-        let jetson_addr = "localhost:9092";
-        let mut jetson_stream = TcpStream::connect(jetson_addr).await?;
+  
+        let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
         let control_message = NetworkMessage::Control(ControlMessage::StartExperiment {
             config: config.clone(),
         });

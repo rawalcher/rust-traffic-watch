@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_FPS};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TimingPayload {
@@ -134,8 +135,8 @@ impl ExperimentConfig {
             experiment_id,
             model_name,
             mode,
-            duration_seconds: 30,
-            fixed_fps: 10.0,
+            duration_seconds: DEFAULT_DURATION_SECONDS,
+            fixed_fps: DEFAULT_FPS,
         }
     }
 }

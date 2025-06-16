@@ -1,27 +1,30 @@
-use std::error;
+use log::{debug, error, info};
+use shared::constants::{jetson_bind_address, JETSON_PORT};
 use shared::{
-    current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_result_to_controller
-    , ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
+    current_timestamp_micros, perform_python_inference_with_counts, receive_message,
+    send_result_to_controller, ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
     PersistentPythonDetector, TimingPayload,
 };
+use std::error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use log::{info, debug, error};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
     if std::env::var("RUST_LOG").is_err() {
-        unsafe { std::env::set_var("RUST_LOG", "info"); }
+        unsafe {
+            std::env::set_var("RUST_LOG", "info");
+        }
     }
     env_logger::init();
 
     info!("Jetson Coordinator starting...");
 
-    let controller_listener = match TcpListener::bind("0.0.0.0:9092").await {
+    let controller_listener = match TcpListener::bind(&jetson_bind_address()).await {
         Ok(listener) => {
-            info!("Listening on 0.0.0.0:9092");
+            info!("Listening on Port {}", JETSON_PORT);
             listener
         }
         Err(_) => {
@@ -44,7 +47,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         let stream = Arc::new(Mutex::new(stream));
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, shutdown_flag, config_ref, detector_ref).await {
+            if let Err(e) = handle_connection(stream, shutdown_flag, config_ref, detector_ref).await
+            {
                 error!("Connection error: {}", e);
             }
         });
@@ -77,7 +81,10 @@ async fn handle_connection(
 
         match message_result {
             Ok(NetworkMessage::Control(ControlMessage::StartExperiment { config })) => {
-                info!("Starting experiment: {} with model {}", config.experiment_id, config.model_name);
+                info!(
+                    "Starting experiment: {} with model {}",
+                    config.experiment_id, config.model_name
+                );
 
                 match PersistentPythonDetector::new(config.model_name.clone()) {
                     Ok(new_detector) => {
