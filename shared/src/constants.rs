@@ -3,9 +3,9 @@ pub const PI_PORT: u16 = 8080;
 pub const JETSON_PORT: u16 = 9092;
 
 
-pub const PI_ADDRESS: &str = "localhost";
+pub const PI_ADDRESS: &str = "192.168.68.57";
 pub const JETSON_ADDRESS: &str = "192.168.68.59";
-pub const CONTROLLER_ADDRESS: &str = "192.168.68.59";
+pub const CONTROLLER_ADDRESS: &str = "192.168.68.70";
 
 
 pub const DEFAULT_MODEL: &str = "yolov5s";
