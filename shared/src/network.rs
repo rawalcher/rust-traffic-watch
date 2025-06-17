@@ -32,8 +32,8 @@ pub async fn send_result_to_controller(
     timing: &TimingPayload,
     inference: InferenceResult,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let controller_addr = "localhost:9090";
-    let mut controller_stream = TcpStream::connect(controller_addr).await?;
+    let controller_addr = format!("{}:{}", crate::constants::CONTROLLER_ADDRESS, crate::constants::CONTROLLER_PORT);
+    let mut controller_stream = TcpStream::connect(&controller_addr).await?;
 
     let result = ProcessingResult {
         timing: timing.clone(),
