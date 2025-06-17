@@ -14,7 +14,7 @@ pub const MAX_FRAME_SEQUENCE: u64 = 900;
 pub const FRAME_WIDTH: u32 = 1920;
 pub const FRAME_HEIGHT: u32 = 1080;
 
-pub const PYTHON_VENV_PATH: &str = ".venv/bin/python";
+pub const PYTHON_VENV_PATH: &str = "python3";
 pub const PYTHON_SCRIPT_PATH: &str = "python/python_inference.py";
 
 pub fn pi_full_address() -> String {
