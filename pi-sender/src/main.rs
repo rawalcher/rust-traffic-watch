@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 use log::{info, debug, error, warn};
-use shared::constants::{jetson_full_address, pi_bind_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, controller_bind_address, CONTROLLER_PORT};
+use shared::constants::{jetson_full_address, pi_bind_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, CONTROLLER_PORT};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
@@ -40,10 +40,10 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
                 match config.mode {
                     ExperimentMode::LocalOnly => {
-                        run_local_experiment_with_preheating(config).await?;
+                        run_local_experiment_with_preheating(config, &listener).await?;
                     }
                     ExperimentMode::Offload => {
-                        run_offload_experiment_with_preheating(config).await?;
+                        run_offload_experiment_with_preheating(config, &listener).await?;
                     }
                 }
             }
@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
 async fn run_local_experiment_with_preheating(
     config: ExperimentConfig,
+    listener: &TcpListener,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("LOCAL MODE: Starting preheating phase...");
 
@@ -79,8 +80,8 @@ async fn run_local_experiment_with_preheating(
     // Phase 2: Signal preheating complete
     send_preheating_complete().await?;
 
-    // Phase 3: Wait for experiment start signal
-    wait_for_experiment_start().await?;
+    // Phase 3: Wait for experiment start signal (reuse existing listener)
+    wait_for_experiment_start(listener).await?;
 
     // Phase 4: Run actual experiment
     info!("Starting LOCAL experiment - Pi processes frames locally");
@@ -91,6 +92,7 @@ async fn run_local_experiment_with_preheating(
 
 async fn run_offload_experiment_with_preheating(
     config: ExperimentConfig,
+    listener: &TcpListener,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("OFFLOAD MODE: Starting preheating phase...");
 
@@ -98,8 +100,8 @@ async fn run_offload_experiment_with_preheating(
     info!("Pi ready for offload mode");
     send_preheating_complete().await?;
 
-    // Phase 2: Wait for experiment start signal
-    wait_for_experiment_start().await?;
+    // Phase 2: Wait for experiment start signal (reuse existing listener)
+    wait_for_experiment_start(listener).await?;
 
     // Phase 3: Run actual experiment
     info!("Starting OFFLOAD experiment - Pi sends frames to Jetson");
@@ -108,8 +110,7 @@ async fn run_offload_experiment_with_preheating(
     Ok(())
 }
 
-async fn wait_for_experiment_start() -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    let listener = TcpListener::bind(&pi_bind_address()).await?;
+async fn wait_for_experiment_start(listener: &TcpListener) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("Waiting for experiment start signal...");
 
     let (mut stream, _addr) = listener.accept().await?;
