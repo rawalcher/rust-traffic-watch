@@ -1,8 +1,8 @@
-use log::{debug, error, info};
-use shared::constants::{jetson_bind_address, JETSON_PORT};
+use log::{debug, error, info, warn};
+use shared::constants::{jetson_bind_address, JETSON_PORT, CONTROLLER_ADDRESS, CONTROLLER_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message,
-    send_result_to_controller, ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
+    send_result_to_controller, send_message, ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
     PersistentPythonDetector, TimingPayload,
 };
 use std::error;
@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let should_shutdown = Arc::new(AtomicBool::new(false));
     let current_config = Arc::new(Mutex::new(None::<ExperimentConfig>));
     let detector = Arc::new(Mutex::new(None::<PersistentPythonDetector>));
+    let experiment_started = Arc::new(AtomicBool::new(false));
 
     while !should_shutdown.load(Ordering::Relaxed) {
         let (stream, addr) = controller_listener.accept().await?;
@@ -44,10 +45,11 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         let shutdown_flag = Arc::clone(&should_shutdown);
         let config_ref = Arc::clone(&current_config);
         let detector_ref = Arc::clone(&detector);
+        let experiment_flag = Arc::clone(&experiment_started);
         let stream = Arc::new(Mutex::new(stream));
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, shutdown_flag, config_ref, detector_ref).await
+            if let Err(e) = handle_connection(stream, shutdown_flag, config_ref, detector_ref, experiment_flag).await
             {
                 error!("Connection error: {}", e);
             }
@@ -68,6 +70,7 @@ async fn handle_connection(
     should_shutdown: Arc<AtomicBool>,
     current_config: Arc<Mutex<Option<ExperimentConfig>>>,
     detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
+    experiment_started: Arc<AtomicBool>,
 ) -> Result<(), String> {
     loop {
         if should_shutdown.load(Ordering::Relaxed) {
@@ -82,21 +85,33 @@ async fn handle_connection(
         match message_result {
             Ok(NetworkMessage::Control(ControlMessage::StartExperiment { config })) => {
                 info!(
-                    "Starting experiment: {} with model {}",
+                    "Starting preheating for experiment: {} with model {}",
                     config.experiment_id, config.model_name
                 );
 
+                // Phase 1: Initialize detector (YOLOv5 handles warmup automatically)
                 match PersistentPythonDetector::new(config.model_name.clone()) {
                     Ok(new_detector) => {
                         *detector.lock().await = Some(new_detector);
-                        debug!("Detector initialized");
+                        info!("Detector initialized and preheated");
                     }
                     Err(e) => {
                         error!("Failed to initialize detector: {}", e);
                         return Err(format!("Failed to initialize detector: {}", e));
                     }
                 }
+
                 *current_config.lock().await = Some(config);
+
+                // Phase 2: Signal preheating complete
+                if let Err(e) = send_preheating_complete().await {
+                    error!("Failed to send preheating complete: {}", e);
+                    return Err(format!("Failed to send preheating complete: {}", e));
+                }
+            }
+            Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
+                info!("Received experiment start signal!");
+                experiment_started.store(true, Ordering::Relaxed);
             }
             Ok(NetworkMessage::Control(ControlMessage::Shutdown)) => {
                 info!("Shutdown requested");
@@ -110,6 +125,12 @@ async fn handle_connection(
                 break;
             }
             Ok(NetworkMessage::Frame(timing)) => {
+                // Only process frames if experiment has started
+                if !experiment_started.load(Ordering::Relaxed) {
+                    debug!("Frame received but experiment not started yet, ignoring");
+                    continue;
+                }
+
                 let config_guard = current_config.lock().await;
                 if let Some(ref config) = *config_guard {
                     let model_name = config.model_name.clone();
@@ -131,6 +152,16 @@ async fn handle_connection(
         }
     }
 
+    Ok(())
+}
+
+async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    let controller_addr = format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_PORT);
+    let mut controller_stream = TcpStream::connect(&controller_addr).await?;
+    let message = ControlMessage::PreheatingComplete;
+    send_message(&mut controller_stream, &message).await?;
+
+    info!("Sent preheating complete signal to controller");
     Ok(())
 }
 

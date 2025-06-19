@@ -17,8 +17,12 @@ class PersistentPiInferenceServer:
         if self.device.type == 'cuda':
             self.model = self.model.to(self.device)
             torch.backends.cudnn.benchmark = True
+            self.model.warmup(imgsz=(1, 3, 640, 640))
         else:
             torch.set_num_threads(1)
+            dummy_input = torch.zeros(1, 3, 640, 640)
+            with torch.no_grad():
+                _ = self.model(dummy_input)
 
         self.traffic_classes = {0, 1, 2, 3, 5, 6, 7}
         self.class_mapping = {

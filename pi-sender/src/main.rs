@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
-use log::{info, debug, error};
-use shared::constants::{jetson_full_address, pi_bind_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT};
+use log::{info, debug, error, warn};
+use shared::constants::{jetson_full_address, pi_bind_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, controller_bind_address, CONTROLLER_PORT};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
@@ -34,16 +34,16 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         match message {
             NetworkMessage::Control(ControlMessage::StartExperiment { config }) => {
                 info!(
-                    "Starting experiment: {} in mode {:?} with model {}",
+                    "Starting preheating for experiment: {} in mode {:?} with model {}",
                     config.experiment_id, config.mode, config.model_name
                 );
 
                 match config.mode {
                     ExperimentMode::LocalOnly => {
-                        run_local_experiment(config).await?;
+                        run_local_experiment_with_preheating(config).await?;
                     }
                     ExperimentMode::Offload => {
-                        run_offload_experiment(config).await?;
+                        run_offload_experiment_with_preheating(config).await?;
                     }
                 }
             }
@@ -62,19 +62,92 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     Ok(())
 }
 
-async fn run_local_experiment(
+async fn run_local_experiment_with_preheating(
     config: ExperimentConfig,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    info!("Running LOCAL experiment - Pi processes frames locally");
+    info!("LOCAL MODE: Starting preheating phase...");
 
-    let mut detector = PersistentPythonDetector::new(config.model_name.clone())
+    // Phase 1: Preheating - Initialize detector (YOLOv5 will handle warmup automatically)
+    let detector = PersistentPythonDetector::new(config.model_name.clone())
         .map_err(|e| {
             error!("Failed to initialize detector: {}", e);
             format!("Failed to initialize Python detector: {}", e)
         })?;
 
-    debug!("Detector initialized with model: {}", config.model_name);
+    info!("Detector initialized and preheated");
 
+    // Phase 2: Signal preheating complete
+    send_preheating_complete().await?;
+
+    // Phase 3: Wait for experiment start signal
+    wait_for_experiment_start().await?;
+
+    // Phase 4: Run actual experiment
+    info!("Starting LOCAL experiment - Pi processes frames locally");
+    run_local_experiment_loop(config, detector).await?;
+
+    Ok(())
+}
+
+async fn run_offload_experiment_with_preheating(
+    config: ExperimentConfig,
+) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    info!("OFFLOAD MODE: Starting preheating phase...");
+
+    // Phase 1: Signal preheating complete (Pi doesn't need to load model in offload mode)
+    info!("Pi ready for offload mode");
+    send_preheating_complete().await?;
+
+    // Phase 2: Wait for experiment start signal
+    wait_for_experiment_start().await?;
+
+    // Phase 3: Run actual experiment
+    info!("Starting OFFLOAD experiment - Pi sends frames to Jetson");
+    run_offload_experiment_loop(config).await?;
+
+    Ok(())
+}
+
+async fn wait_for_experiment_start() -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    let listener = TcpListener::bind(&pi_bind_address()).await?;
+    info!("Waiting for experiment start signal...");
+
+    let (mut stream, _addr) = listener.accept().await?;
+    let message = receive_message::<NetworkMessage>(&mut stream).await?;
+
+    match message {
+        NetworkMessage::Control(ControlMessage::BeginExperiment) => {
+            info!("Received experiment start signal!");
+            Ok(())
+        }
+        NetworkMessage::Control(ControlMessage::Shutdown) => {
+            info!("Received shutdown during wait");
+            Err("Shutdown received".into())
+        }
+        _ => {
+            warn!("Unexpected message while waiting for start signal");
+            Err("Unexpected message".into())
+        }
+    }
+}
+
+async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    let controller_addr = format!("{}:{}",
+                                  shared::constants::CONTROLLER_ADDRESS, CONTROLLER_PORT
+    );
+
+    let mut controller_stream = TcpStream::connect(&controller_addr).await?;
+    let message = ControlMessage::PreheatingComplete;
+    send_message(&mut controller_stream, &message).await?;
+
+    info!("Sent preheating complete signal to controller");
+    Ok(())
+}
+
+async fn run_local_experiment_loop(
+    config: ExperimentConfig,
+    mut detector: PersistentPythonDetector,
+) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
@@ -117,15 +190,12 @@ async fn run_local_experiment(
     })?;
 
     debug!("Detector shut down");
-
     Ok(())
 }
 
-async fn run_offload_experiment(
+async fn run_offload_experiment_loop(
     config: ExperimentConfig,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    info!("Running OFFLOAD experiment - Pi sends frames to Jetson");
-
     let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
     info!("Connected to Jetson at {}", jetson_full_address());
 

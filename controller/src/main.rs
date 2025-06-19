@@ -1,13 +1,13 @@
 use std::error;
 use csv::Writer;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use shared::{
     current_timestamp_micros, receive_message, send_message, ControlMessage, ExperimentConfig,
     ExperimentMode, NetworkMessage, ProcessingResult,
 };
 use std::env;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep, Duration, Instant, timeout};
 use shared::constants::{controller_bind_address, jetson_full_address, pi_full_address, CONTROLLER_PORT, DEFAULT_MODEL};
 
 #[tokio::main]
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
         let config = ExperimentConfig::new(experiment_id.clone(), mode.clone(), model_name.clone());
 
-        let results = run_experiment(config).await?;
+        let results = run_experiment_with_preheating(config).await?;
         generate_analysis_csv(&results, &experiment_id)?;
 
         info!(
@@ -59,31 +59,77 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     Ok(())
 }
 
-async fn run_experiment(
+async fn run_experiment_with_preheating(
     config: ExperimentConfig,
 ) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
+    info!("Starting preheating phase for experiment: {}", config.experiment_id);
+
     let listener = TcpListener::bind(controller_bind_address()).await?;
     debug!("Listening on port {}", CONTROLLER_PORT);
 
+    // Phase 1: Connect and send config for preheating
     let mut pi_stream = TcpStream::connect(pi_full_address()).await?;
     info!("Connected to Pi");
 
+    let mut jetson_stream_opt = None;
     if matches!(config.mode, ExperimentMode::Offload) {
-  
         let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
         let control_message = NetworkMessage::Control(ControlMessage::StartExperiment {
             config: config.clone(),
         });
         send_message(&mut jetson_stream, &control_message).await?;
-        info!("Connected to Jetson and sent config");
+        info!("Connected to Jetson and sent config for preheating");
+        jetson_stream_opt = Some(jetson_stream);
     }
 
     let control_message = NetworkMessage::Control(ControlMessage::StartExperiment {
         config: config.clone(),
     });
     send_message(&mut pi_stream, &control_message).await?;
-    debug!("Sent experiment config to Pi");
+    info!("Sent experiment config to Pi for preheating");
 
+    // Phase 2: Wait for preheating completion
+    let mut devices_ready = 0;
+    let expected_devices = if matches!(config.mode, ExperimentMode::Offload) { 2 } else { 1 };
+
+    info!("Waiting for {} device(s) to complete preheating...", expected_devices);
+
+    while devices_ready < expected_devices {
+        let (mut stream, addr) = listener.accept().await?;
+        debug!("Received connection from {}", addr);
+
+        match timeout(Duration::from_secs(60), receive_message::<ControlMessage>(&mut stream)).await {
+            Ok(Ok(ControlMessage::PreheatingComplete)) => {
+                devices_ready += 1;
+                info!("Device {} preheating complete ({}/{})", addr, devices_ready, expected_devices);
+            }
+            Ok(Ok(msg)) => {
+                warn!("Unexpected message during preheating: {:?}", msg);
+            }
+            Ok(Err(e)) => {
+                error!("Error receiving preheating confirmation: {}", e);
+            }
+            Err(_) => {
+                error!("Timeout waiting for preheating confirmation from {}", addr);
+                return Err("Preheating timeout".into());
+            }
+        }
+    }
+
+    info!("All devices ready! Starting experiment in 2 seconds...");
+    sleep(Duration::from_secs(2)).await;
+
+    // Phase 3: Signal devices to begin actual experiment
+    let begin_message = NetworkMessage::Control(ControlMessage::BeginExperiment);
+    send_message(&mut pi_stream, &begin_message).await?;
+
+    if let Some(ref mut jetson_stream) = jetson_stream_opt {
+        send_message(jetson_stream, &begin_message).await?;
+    }
+
+    info!("Experiment started - collecting results...");
+
+    // Phase 4: Collect experiment results
     let mut results = Vec::new();
     let experiment_start = Instant::now();
 
@@ -109,9 +155,15 @@ async fn run_experiment(
         }
     }
 
+    // Phase 5: Shutdown
     let shutdown_message = NetworkMessage::Control(ControlMessage::Shutdown);
     let _ = send_message(&mut pi_stream, &shutdown_message).await;
-    debug!("Sent shutdown to Pi");
+
+    if let Some(ref mut jetson_stream) = jetson_stream_opt {
+        let _ = send_message(jetson_stream, &shutdown_message).await;
+    }
+
+    info!("Sent shutdown signals to all devices");
 
     Ok(results)
 }

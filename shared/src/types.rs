@@ -35,6 +35,9 @@ pub struct ExperimentConfig {
 pub enum ControlMessage {
     StartExperiment { config: ExperimentConfig },
     ProcessingResult(ProcessingResult),
+    PreheatingComplete,  
+    ReadyToStart,        
+    BeginExperiment,     
     Shutdown,
 }
 
