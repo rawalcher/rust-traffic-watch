@@ -7,7 +7,7 @@ pub const JETSON_ADDRESS: &str = "192.168.68.59";
 pub const CONTROLLER_ADDRESS: &str = "192.168.68.70";
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
-pub const DEFAULT_DURATION_SECONDS: u64 = 30;
+pub const DEFAULT_DURATION_SECONDS: u64 = 900; // 15 minutes
 pub const DEFAULT_FPS: f32 = 10.0;
 
 pub const MAX_FRAME_SEQUENCE: u64 = 900;
