@@ -1,4 +1,4 @@
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use shared::constants::{jetson_bind_address, JETSON_PORT, CONTROLLER_ADDRESS, CONTROLLER_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message,
@@ -34,31 +34,19 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     };
 
     let should_shutdown = Arc::new(AtomicBool::new(false));
-    let current_config = Arc::new(Mutex::new(None::<ExperimentConfig>));
-    let detector = Arc::new(Mutex::new(None::<PersistentPythonDetector>));
-    let experiment_started = Arc::new(AtomicBool::new(false));
 
     while !should_shutdown.load(Ordering::Relaxed) {
         let (stream, addr) = controller_listener.accept().await?;
         info!("Connected: {}", addr);
 
         let shutdown_flag = Arc::clone(&should_shutdown);
-        let config_ref = Arc::clone(&current_config);
-        let detector_ref = Arc::clone(&detector);
-        let experiment_flag = Arc::clone(&experiment_started);
         let stream = Arc::new(Mutex::new(stream));
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, shutdown_flag, config_ref, detector_ref, experiment_flag).await
-            {
+            if let Err(e) = handle_connection(stream, shutdown_flag).await {
                 error!("Connection error: {}", e);
             }
         });
-    }
-
-    let mut detector_guard = detector.lock().await;
-    if let Some(ref mut det) = detector_guard.as_mut() {
-        let _ = det.shutdown();
     }
 
     info!("Jetson Coordinator stopped");
@@ -68,10 +56,11 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 async fn handle_connection(
     stream: Arc<Mutex<TcpStream>>,
     should_shutdown: Arc<AtomicBool>,
-    current_config: Arc<Mutex<Option<ExperimentConfig>>>,
-    detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
-    experiment_started: Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let mut detector: Option<PersistentPythonDetector> = None;
+    let mut current_config: Option<ExperimentConfig> = None;
+    let mut experiment_started = false;
+
     loop {
         if should_shutdown.load(Ordering::Relaxed) {
             break;
@@ -92,7 +81,7 @@ async fn handle_connection(
                 // Phase 1: Initialize detector (YOLOv5 handles warmup automatically)
                 match PersistentPythonDetector::new(config.model_name.clone()) {
                     Ok(new_detector) => {
-                        *detector.lock().await = Some(new_detector);
+                        detector = Some(new_detector);
                         info!("Detector initialized and preheated");
                     }
                     Err(e) => {
@@ -101,7 +90,7 @@ async fn handle_connection(
                     }
                 }
 
-                *current_config.lock().await = Some(config);
+                current_config = Some(config);
 
                 // Phase 2: Signal preheating complete
                 if let Err(e) = send_preheating_complete().await {
@@ -111,13 +100,12 @@ async fn handle_connection(
             }
             Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
                 info!("Received experiment start signal!");
-                experiment_started.store(true, Ordering::Relaxed);
+                experiment_started = true;
             }
             Ok(NetworkMessage::Control(ControlMessage::Shutdown)) => {
                 info!("Shutdown requested");
 
-                let mut detector_guard = detector.lock().await;
-                if let Some(mut det) = detector_guard.take() {
+                if let Some(mut det) = detector.take() {
                     let _ = det.shutdown();
                     debug!("Detector shut down");
                 }
@@ -126,18 +114,21 @@ async fn handle_connection(
             }
             Ok(NetworkMessage::Frame(timing)) => {
                 // Only process frames if experiment has started
-                if !experiment_started.load(Ordering::Relaxed) {
+                if !experiment_started {
                     debug!("Frame received but experiment not started yet, ignoring");
                     continue;
                 }
 
-                let config_guard = current_config.lock().await;
-                if let Some(ref config) = *config_guard {
+                if let Some(ref config) = current_config {
                     let model_name = config.model_name.clone();
-                    drop(config_guard);
 
-                    let detector_ref = Arc::clone(&detector);
-                    process_frame_and_send_result(timing, &model_name, detector_ref).await?;
+                    if let Some(ref mut det) = detector {
+                        if let Err(e) = process_frame_and_send_result(timing, &model_name, det).await {
+                            error!("Error processing frame: {}", e);
+                        }
+                    } else {
+                        debug!("Frame received but detector not initialized");
+                    }
                 } else {
                     debug!("Frame received but no experiment config set");
                 }
@@ -150,6 +141,10 @@ async fn handle_connection(
                 break;
             }
         }
+    }
+
+    if let Some(mut det) = detector {
+        let _ = det.shutdown();
     }
 
     Ok(())
@@ -168,7 +163,7 @@ async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + 
 async fn process_frame_and_send_result(
     mut timing: TimingPayload,
     model_name: &str,
-    detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
+    detector: &mut PersistentPythonDetector,
 ) -> Result<(), String> {
     timing.jetson_received = Some(current_timestamp_micros());
     timing.jetson_inference_start = Some(current_timestamp_micros());
@@ -192,23 +187,17 @@ async fn process_frame_and_send_result(
 async fn perform_inference(
     timing: &TimingPayload,
     _model_name: &str,
-    detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
+    detector: &mut PersistentPythonDetector,
 ) -> Result<InferenceResult, String> {
-    let mut detector_guard = detector.lock().await;
+    let (inference_result, counts) = perform_python_inference_with_counts(timing, detector).await?;
 
-    if let Some(ref mut det) = detector_guard.as_mut() {
-        let (inference_result, counts) = perform_python_inference_with_counts(timing, det).await?;
+    debug!(
+        "Frame {} inference: {} vehicles, {} pedestrians, {:.1}ms",
+        timing.sequence_id,
+        counts.total_vehicles,
+        counts.pedestrians,
+        inference_result.processing_time_us as f64 / 1000.0
+    );
 
-        debug!(
-            "Frame {} inference: {} vehicles, {} pedestrians, {:.1}ms",
-            timing.sequence_id,
-            counts.total_vehicles,
-            counts.pedestrians,
-            inference_result.processing_time_us as f64 / 1000.0
-        );
-
-        Ok(inference_result)
-    } else {
-        Err("Python detector not initialized".to_string())
-    }
+    Ok(inference_result)
 }
