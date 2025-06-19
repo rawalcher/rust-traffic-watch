@@ -1,4 +1,4 @@
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use shared::constants::{jetson_bind_address, JETSON_PORT, CONTROLLER_ADDRESS, CONTROLLER_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message,
