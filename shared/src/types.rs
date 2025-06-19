@@ -35,9 +35,9 @@ pub struct ExperimentConfig {
 pub enum ControlMessage {
     StartExperiment { config: ExperimentConfig },
     ProcessingResult(ProcessingResult),
-    PreheatingComplete,  
-    ReadyToStart,        
-    BeginExperiment,     
+    PreheatingComplete,
+    ReadyToStart,
+    BeginExperiment,
     Shutdown,
 }
 
@@ -57,8 +57,14 @@ pub struct ProcessingResult {
 pub struct InferenceResult {
     pub sequence_id: u64,
     pub detections: Vec<Detection>,
-    pub confidence: f32,
     pub processing_time_us: u64,
+
+    pub frame_size_bytes: u32,
+    pub detection_count: u32,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub model_name: String,
+    pub experiment_mode: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

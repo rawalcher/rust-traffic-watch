@@ -177,7 +177,11 @@ fn generate_analysis_csv(
         return Ok(());
     }
 
-    let filename = format!("experiment_{}_analysis.csv", experiment_id);
+    std::fs::create_dir_all("logs")?;
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("logs/experiment_{}_{}.csv", experiment_id, timestamp);
+
     let mut writer = Writer::from_path(&filename).map_err(|e| {
         error!("Failed to create CSV file {}: {}", filename, e);
         e
@@ -196,59 +200,37 @@ fn generate_analysis_csv(
         "network_latency_us",
         "processing_time_us",
         "total_latency_us",
-        "detections_count",
+        "frame_size_bytes",
+        "detection_count",
+        "image_width",
+        "image_height",
+        "model_name",
+        "experiment_mode",
     ])?;
 
     for result in results {
         let timing = &result.timing;
+        let inference = &result.inference;
 
         writer.write_record(&[
             &timing.sequence_id.to_string(),
-            &timing
-                .pi_capture_start
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .pi_sent_to_jetson
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .jetson_received
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .jetson_inference_start
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .jetson_inference_complete
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .jetson_sent_result
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .controller_received
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .pi_overhead_us()
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .network_latency_us()
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .jetson_processing_us()
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &timing
-                .total_latency_us()
-                .map(|t| t.to_string())
-                .unwrap_or_default(),
-            &result.inference.detections.len().to_string(),
+            &timing.pi_capture_start.map(|t| t.to_string()).unwrap_or_default(),
+            &timing.pi_sent_to_jetson.map(|t| t.to_string()).unwrap_or_default(),
+            &timing.jetson_received.map(|t| t.to_string()).unwrap_or_default(),
+            &timing.jetson_inference_start.map(|t| t.to_string()).unwrap_or_default(),
+            &timing.jetson_inference_complete.map(|t| t.to_string()).unwrap_or_default(),
+            &timing.jetson_sent_result.map(|t| t.to_string()).unwrap_or_default(),
+            &timing.controller_received.map(|t| t.to_string()).unwrap_or_default(),
+            &timing.pi_overhead_us().map(|t| t.to_string()).unwrap_or_default(),
+            &timing.network_latency_us().map(|t| t.to_string()).unwrap_or_default(),
+            &inference.processing_time_us.to_string(),
+            &timing.total_latency_us().map(|t| t.to_string()).unwrap_or_default(),
+            &inference.frame_size_bytes.to_string(),
+            &inference.detection_count.to_string(),
+            &inference.image_width.to_string(),
+            &inference.image_height.to_string(),
+            &inference.model_name,
+            &inference.experiment_mode,
         ])?;
     }
 

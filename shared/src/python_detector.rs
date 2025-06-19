@@ -8,8 +8,8 @@ use crate::constants::{PYTHON_SCRIPT_PATH, PYTHON_VENV_PATH};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PythonDetectionResult {
     pub detections: Vec<Detection>,
-    pub confidence: f32,
-    pub processing_time_us: u64,
+    pub image_width: u32,
+    pub image_height: u32,
     pub counts: ObjectCounts,
 }
 
@@ -17,8 +17,8 @@ pub struct PythonDetectionResult {
 struct PythonErrorResult {
     pub error: String,
     pub detections: Vec<Detection>,
-    pub confidence: f32,
-    pub processing_time_us: u64,
+    pub image_width: u32,
+    pub image_height: u32,
     pub counts: ObjectCounts,
 }
 
@@ -42,7 +42,6 @@ impl PersistentPythonDetector {
                 format!("Failed to spawn Python process: {}", e)
             })?;
 
-        // Wait for ready signal
         let stdout = process.stdout.as_mut().unwrap();
         let mut reader = BufReader::new(stdout);
         let mut ready_line = String::new();
@@ -136,19 +135,31 @@ impl Drop for PersistentPythonDetector {
 pub async fn perform_python_inference_with_counts(
     timing: &TimingPayload,
     detector: &mut PersistentPythonDetector,
+    model_name: &str,
+    experiment_mode: &str,
 ) -> Result<(InferenceResult, ObjectCounts), String> {
     let image_bytes = timing
         .frame_data
         .as_ref()
         .ok_or("No frame data in timing payload")?;
 
+    let start_time = crate::current_timestamp_micros();
     let result = detector.detect_objects(image_bytes)?;
+    let end_time = crate::current_timestamp_micros();
+
+    let processing_time_us = end_time - start_time;
 
     let inference_result = InferenceResult {
         sequence_id: timing.sequence_id,
-        detections: result.detections,
-        confidence: result.confidence,
-        processing_time_us: result.processing_time_us,
+        detections: result.detections.clone(),
+        processing_time_us,
+
+        frame_size_bytes: image_bytes.len() as u32,
+        detection_count: result.detections.len() as u32,
+        image_width: result.image_width,
+        image_height: result.image_height,
+        model_name: model_name.to_string(),
+        experiment_mode: experiment_mode.to_string(),
     };
 
     Ok((inference_result, result.counts))

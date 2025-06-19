@@ -158,7 +158,7 @@ async fn run_local_experiment_loop(
         let frame_data = load_frame_from_image(sequence_id)?;
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        let (inference_result, counts) = process_locally_with_python(&timing, &mut detector).await
+        let (inference_result, counts) = process_locally_with_python(&timing, &mut detector, &config.model_name).await
             .map_err(|e| {
                 error!("Python inference failed: {}", e);
                 format!("Python inference failed: {}", e)
@@ -230,8 +230,9 @@ async fn run_offload_experiment_loop(
 async fn process_locally_with_python(
     timing: &TimingPayload,
     detector: &mut PersistentPythonDetector,
+    model_name: &str,
 ) -> Result<(InferenceResult, shared::ObjectCounts), String> {
-    perform_python_inference_with_counts(timing, detector).await
+    perform_python_inference_with_counts(timing, detector, model_name, "local").await
 }
 
 fn load_frame_from_image(

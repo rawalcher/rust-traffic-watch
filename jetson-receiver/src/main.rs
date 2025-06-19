@@ -189,7 +189,7 @@ async fn perform_inference(
     _model_name: &str,
     detector: &mut PersistentPythonDetector,
 ) -> Result<InferenceResult, String> {
-    let (inference_result, counts) = perform_python_inference_with_counts(timing, detector).await?;
+    let (inference_result, counts) = perform_python_inference_with_counts(timing, detector, _model_name, "offload").await?;
 
     debug!(
         "Frame {} inference: {} vehicles, {} pedestrians, {:.1}ms",

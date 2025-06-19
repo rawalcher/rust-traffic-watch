@@ -2,10 +2,8 @@ import io
 import json
 import struct
 import sys
-import time
 import torch
 from PIL import Image
-
 
 class PersistentPiInferenceServer:
     def __init__(self, model_name='yolov5s'):
@@ -40,9 +38,9 @@ class PersistentPiInferenceServer:
             self.device = torch.device('cpu')
 
     def process_frame(self, image_bytes):
-        start_time = time.time()
-
         image = Image.open(io.BytesIO(image_bytes))
+
+        width, height = image.size
 
         if self.device.type == 'cuda':
             with torch.cuda.amp.autocast():
@@ -75,13 +73,10 @@ class PersistentPiInferenceServer:
                 if obj_class in self.vehicle_classes:
                     counts['total_vehicles'] += 1
 
-        processing_time_us = int((time.time() - start_time) * 1_000_000)
-        max_confidence = max((d['confidence'] for d in detections), default=0.0)
-
         return {
             'detections': detections,
-            'confidence': max_confidence,
-            'processing_time_us': processing_time_us,
+            'image_width': width,
+            'image_height': height,
             'counts': counts
         }
 
@@ -113,8 +108,8 @@ class PersistentPiInferenceServer:
                 error_result = {
                     'error': str(e),
                     'detections': [],
-                    'confidence': 0.0,
-                    'processing_time_us': 0,
+                    'image_width': 0,
+                    'image_height': 0,
                     'counts': empty_counts
                 }
                 self.send_response(error_result)
