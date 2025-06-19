@@ -40,10 +40,10 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
                 match config.mode {
                     ExperimentMode::LocalOnly => {
-                        run_local_experiment_with_preheating(config, &listener).await?;
+                        run_local_experiment_with_preheating(config, stream).await?;
                     }
                     ExperimentMode::Offload => {
-                        run_offload_experiment_with_preheating(config, &listener).await?;
+                        run_offload_experiment_with_preheating(config, stream).await?;
                     }
                 }
             }
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
 async fn run_local_experiment_with_preheating(
     config: ExperimentConfig,
-    listener: &TcpListener,
+    mut controller_stream: TcpStream,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("LOCAL MODE: Starting preheating phase...");
 
@@ -80,8 +80,8 @@ async fn run_local_experiment_with_preheating(
     // Phase 2: Signal preheating complete
     send_preheating_complete().await?;
 
-    // Phase 3: Wait for experiment start signal (reuse existing listener)
-    wait_for_experiment_start(listener).await?;
+    // Phase 3: Wait for experiment start signal on the same stream
+    wait_for_experiment_start_on_stream(&mut controller_stream).await?;
 
     // Phase 4: Run actual experiment
     info!("Starting LOCAL experiment - Pi processes frames locally");
@@ -92,7 +92,7 @@ async fn run_local_experiment_with_preheating(
 
 async fn run_offload_experiment_with_preheating(
     config: ExperimentConfig,
-    listener: &TcpListener,
+    mut controller_stream: TcpStream,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("OFFLOAD MODE: Starting preheating phase...");
 
@@ -100,8 +100,8 @@ async fn run_offload_experiment_with_preheating(
     info!("Pi ready for offload mode");
     send_preheating_complete().await?;
 
-    // Phase 2: Wait for experiment start signal (reuse existing listener)
-    wait_for_experiment_start(listener).await?;
+    // Phase 2: Wait for experiment start signal on the same stream
+    wait_for_experiment_start_on_stream(&mut controller_stream).await?;
 
     // Phase 3: Run actual experiment
     info!("Starting OFFLOAD experiment - Pi sends frames to Jetson");
@@ -110,11 +110,10 @@ async fn run_offload_experiment_with_preheating(
     Ok(())
 }
 
-async fn wait_for_experiment_start(listener: &TcpListener) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+async fn wait_for_experiment_start_on_stream(stream: &mut TcpStream) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("Waiting for experiment start signal...");
 
-    let (mut stream, _addr) = listener.accept().await?;
-    let message = receive_message::<NetworkMessage>(&mut stream).await?;
+    let message = receive_message::<NetworkMessage>(stream).await?;
 
     match message {
         NetworkMessage::Control(ControlMessage::BeginExperiment) => {
