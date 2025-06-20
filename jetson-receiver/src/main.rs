@@ -37,14 +37,13 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
     while !should_shutdown.load(Ordering::Relaxed) {
         let (stream, addr) = controller_listener.accept().await?;
-        info!("Connected: {}", addr);
+        info!("New connection from: {}", addr);
 
         let shutdown_flag = Arc::clone(&should_shutdown);
-        let stream = Arc::new(Mutex::new(stream));
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, shutdown_flag).await {
-                error!("Connection error: {}", e);
+            if let Err(e) = handle_connection(stream, shutdown_flag, addr).await {
+                error!("Connection error from {}: {}", addr, e);
             }
         });
     }
@@ -54,28 +53,27 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 }
 
 async fn handle_connection(
-    stream: Arc<Mutex<TcpStream>>,
+    mut stream: TcpStream,
     should_shutdown: Arc<AtomicBool>,
+    addr: std::net::SocketAddr,
 ) -> Result<(), String> {
     let mut detector: Option<PersistentPythonDetector> = None;
     let mut current_config: Option<ExperimentConfig> = None;
     let mut experiment_started = false;
+    let mut frames_processed = 0u64;
 
     loop {
         if should_shutdown.load(Ordering::Relaxed) {
             break;
         }
 
-        let message_result = {
-            let mut stream_guard = stream.lock().await;
-            receive_message::<NetworkMessage>(&mut *stream_guard).await
-        };
+        let message_result = receive_message::<NetworkMessage>(&mut stream).await;
 
         match message_result {
             Ok(NetworkMessage::Control(ControlMessage::StartExperiment { config })) => {
                 info!(
-                    "Starting preheating for experiment: {} with model {}",
-                    config.experiment_id, config.model_name
+                    "Starting preheating for experiment: {} with model {} (from {})",
+                    config.experiment_id, config.model_name, addr
                 );
 
                 // Phase 1: Initialize detector (YOLOv5 handles warmup automatically)
@@ -99,11 +97,11 @@ async fn handle_connection(
                 }
             }
             Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
-                info!("Received experiment start signal!");
+                info!("Received experiment start signal from {}!", addr);
                 experiment_started = true;
             }
             Ok(NetworkMessage::Control(ControlMessage::Shutdown)) => {
-                info!("Shutdown requested");
+                info!("Shutdown requested from {}", addr);
 
                 if let Some(mut det) = detector.take() {
                     let _ = det.shutdown();
@@ -113,31 +111,34 @@ async fn handle_connection(
                 break;
             }
             Ok(NetworkMessage::Frame(timing)) => {
-                // Only process frames if experiment has started
-                if !experiment_started {
-                    debug!("Frame received but experiment not started yet, ignoring");
-                    continue;
-                }
+                info!("Received frame {} from {} (experiment_started: {})", 
+                      timing.sequence_id, addr, experiment_started);
 
                 if let Some(ref config) = current_config {
                     let model_name = config.model_name.clone();
 
                     if let Some(ref mut det) = detector {
-                        if let Err(e) = process_frame_and_send_result(timing, &model_name, det).await {
-                            error!("Error processing frame: {}", e);
+                        match process_frame_and_send_result(timing, &model_name, det).await {
+                            Ok(()) => {
+                                frames_processed += 1;
+                                info!("Successfully processed frame (total: {})", frames_processed);
+                            },
+                            Err(e) => {
+                                error!("Error processing frame: {}", e);
+                            }
                         }
                     } else {
-                        debug!("Frame received but detector not initialized");
+                        error!("Frame received but detector not initialized");
                     }
                 } else {
-                    debug!("Frame received but no experiment config set");
+                    error!("Frame received but no experiment config set");
                 }
             }
-            Ok(_) => {
-                debug!("Received unexpected message type");
+            Ok(other_msg) => {
+                debug!("Received unexpected message type from {}: {:?}", addr, other_msg);
             }
             Err(e) => {
-                debug!("Connection ended: {}", e);
+                info!("Connection from {} ended: {}", addr, e);
                 break;
             }
         }
@@ -147,6 +148,7 @@ async fn handle_connection(
         let _ = det.shutdown();
     }
 
+    info!("Connection handler for {} finished. Processed {} frames total.", addr, frames_processed);
     Ok(())
 }
 
@@ -168,31 +170,43 @@ async fn process_frame_and_send_result(
     timing.jetson_received = Some(current_timestamp_micros());
     timing.jetson_inference_start = Some(current_timestamp_micros());
 
+    info!("Starting inference for frame {}", timing.sequence_id);
+
     let inference_result = perform_inference(&timing, model_name, detector)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            error!("Inference failed for frame {}: {}", timing.sequence_id, e);
+            e.to_string()
+        })?;
 
     timing.jetson_inference_complete = Some(current_timestamp_micros());
     timing.jetson_sent_result = Some(current_timestamp_micros());
 
+    info!("Sending result for frame {} to controller", timing.sequence_id);
+
     send_result_to_controller(&timing, inference_result)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            error!("Failed to send result to controller for frame {}: {}", timing.sequence_id, e);
+            e.to_string()
+        })?;
 
-    debug!("Processed frame {}", timing.sequence_id);
+    info!("Successfully processed and sent result for frame {}", timing.sequence_id);
 
     Ok(())
 }
 
 async fn perform_inference(
     timing: &TimingPayload,
-    _model_name: &str,
+    model_name: &str,
     detector: &mut PersistentPythonDetector,
 ) -> Result<InferenceResult, String> {
-    let (inference_result, counts) = perform_python_inference_with_counts(timing, detector, _model_name, "offload").await?;
+    info!("Performing inference for frame {} with model {}", timing.sequence_id, model_name);
 
-    debug!(
-        "Frame {} inference: {} vehicles, {} pedestrians, {:.1}ms",
+    let (inference_result, counts) = perform_python_inference_with_counts(timing, detector, model_name, "offload").await?;
+
+    info!(
+        "Frame {} inference complete: {} vehicles, {} pedestrians, {:.1}ms",
         timing.sequence_id,
         counts.total_vehicles,
         counts.pedestrians,
