@@ -1,8 +1,8 @@
 use log::{debug, error, info, warn};
-use shared::constants::{jetson_bind_address, JETSON_PORT, CONTROLLER_ADDRESS, CONTROLLER_PORT};
+use shared::constants::{jetson_bind_address, CONTROLLER_ADDRESS, CONTROLLER_PORT, JETSON_PORT};
 use shared::{
-    current_timestamp_micros, perform_python_inference_with_counts, receive_message,
-    send_result_to_controller, send_message, ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
+    current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
+    send_result_to_controller, ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
     PersistentPythonDetector, TimingPayload,
 };
 use std::error;
@@ -10,6 +10,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+
+#[derive(Clone)]
+struct SharedState {
+    config: Arc<Mutex<Option<ExperimentConfig>>>,
+    detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
+    experiment_started: Arc<AtomicBool>,
+    frames_processed: Arc<Mutex<u64>>,
+}
+
+impl SharedState {
+    fn new() -> Self {
+        Self {
+            config: Arc::new(Mutex::new(None)),
+            detector: Arc::new(Mutex::new(None)),
+            experiment_started: Arc::new(AtomicBool::new(false)),
+            frames_processed: Arc::new(Mutex::new(0)),
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
@@ -34,15 +53,17 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     };
 
     let should_shutdown = Arc::new(AtomicBool::new(false));
+    let shared_state = SharedState::new();
 
     while !should_shutdown.load(Ordering::Relaxed) {
         let (stream, addr) = controller_listener.accept().await?;
         info!("New connection from: {}", addr);
 
         let shutdown_flag = Arc::clone(&should_shutdown);
+        let state = shared_state.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, shutdown_flag, addr).await {
+            if let Err(e) = handle_connection(stream, shutdown_flag, addr, state).await {
                 error!("Connection error from {}: {}", addr, e);
             }
         });
@@ -56,12 +77,8 @@ async fn handle_connection(
     mut stream: TcpStream,
     should_shutdown: Arc<AtomicBool>,
     addr: std::net::SocketAddr,
+    state: SharedState,
 ) -> Result<(), String> {
-    let mut detector: Option<PersistentPythonDetector> = None;
-    let mut current_config: Option<ExperimentConfig> = None;
-    let mut experiment_started = false;
-    let mut frames_processed = 0u64;
-
     loop {
         if should_shutdown.load(Ordering::Relaxed) {
             break;
@@ -76,21 +93,27 @@ async fn handle_connection(
                     config.experiment_id, config.model_name, addr
                 );
 
-                // Phase 1: Initialize detector (YOLOv5 handles warmup automatically)
-                match PersistentPythonDetector::new(config.model_name.clone()) {
-                    Ok(new_detector) => {
-                        detector = Some(new_detector);
+                let new_detector = match PersistentPythonDetector::new(config.model_name.clone()) {
+                    Ok(detector) => {
                         info!("Detector initialized and preheated");
+                        detector
                     }
                     Err(e) => {
                         error!("Failed to initialize detector: {}", e);
                         return Err(format!("Failed to initialize detector: {}", e));
                     }
+                };
+
+                {
+                    let mut detector_guard = state.detector.lock().await;
+                    *detector_guard = Some(new_detector);
                 }
 
-                current_config = Some(config);
+                {
+                    let mut config_guard = state.config.lock().await;
+                    *config_guard = Some(config);
+                }
 
-                // Phase 2: Signal preheating complete
                 if let Err(e) = send_preheating_complete().await {
                     error!("Failed to send preheating complete: {}", e);
                     return Err(format!("Failed to send preheating complete: {}", e));
@@ -98,44 +121,54 @@ async fn handle_connection(
             }
             Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
                 info!("Received experiment start signal from {}!", addr);
-                experiment_started = true;
+                state.experiment_started.store(true, Ordering::Relaxed);
             }
             Ok(NetworkMessage::Control(ControlMessage::Shutdown)) => {
                 info!("Shutdown requested from {}", addr);
 
-                if let Some(mut det) = detector.take() {
+                let mut detector_guard = state.detector.lock().await;
+                if let Some(mut det) = detector_guard.take() {
                     let _ = det.shutdown();
                     debug!("Detector shut down");
                 }
+
                 should_shutdown.store(true, Ordering::Relaxed);
                 break;
             }
             Ok(NetworkMessage::Frame(timing)) => {
-                info!("Received frame {} from {} (experiment_started: {})", 
-                      timing.sequence_id, addr, experiment_started);
+                let experiment_started = state.experiment_started.load(Ordering::Relaxed);
+                info!(
+                    "Received frame {} from {} (experiment_started: {})",
+                    timing.sequence_id, addr, experiment_started
+                );
 
-                if let Some(ref config) = current_config {
+                let config_opt = {
+                    let config_guard = state.config.lock().await;
+                    config_guard.clone()
+                };
+
+                if let Some(config) = config_opt {
                     let model_name = config.model_name.clone();
 
-                    if let Some(ref mut det) = detector {
-                        match process_frame_and_send_result(timing, &model_name, det).await {
-                            Ok(()) => {
-                                frames_processed += 1;
-                                info!("Successfully processed frame (total: {})", frames_processed);
-                            },
-                            Err(e) => {
-                                error!("Error processing frame: {}", e);
-                            }
+                    match process_frame_and_send_result(timing, &model_name, &state).await {
+                        Ok(()) => {
+                            let mut frames_guard = state.frames_processed.lock().await;
+                            *frames_guard += 1;
+                            info!("Successfully processed frame (total: {})", *frames_guard);
                         }
-                    } else {
-                        error!("Frame received but detector not initialized");
+                        Err(e) => {
+                            error!("Error processing frame: {}", e);
+                        }
                     }
                 } else {
-                    error!("Frame received but no experiment config set");
+                    error!("Frame received but no experiment config set in shared state");
                 }
             }
             Ok(other_msg) => {
-                debug!("Received unexpected message type from {}: {:?}", addr, other_msg);
+                debug!(
+                    "Received unexpected message type from {}: {:?}",
+                    addr, other_msg
+                );
             }
             Err(e) => {
                 info!("Connection from {} ended: {}", addr, e);
@@ -144,11 +177,15 @@ async fn handle_connection(
         }
     }
 
-    if let Some(mut det) = detector {
-        let _ = det.shutdown();
-    }
+    let frames_processed = {
+        let frames_guard = state.frames_processed.lock().await;
+        *frames_guard
+    };
 
-    info!("Connection handler for {} finished. Processed {} frames total.", addr, frames_processed);
+    info!(
+        "Connection handler for {} finished. Total frames processed: {}",
+        addr, frames_processed
+    );
     Ok(())
 }
 
@@ -165,33 +202,44 @@ async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + 
 async fn process_frame_and_send_result(
     mut timing: TimingPayload,
     model_name: &str,
-    detector: &mut PersistentPythonDetector,
+    state: &SharedState,
 ) -> Result<(), String> {
     timing.jetson_received = Some(current_timestamp_micros());
     timing.jetson_inference_start = Some(current_timestamp_micros());
 
     info!("Starting inference for frame {}", timing.sequence_id);
 
-    let inference_result = perform_inference(&timing, model_name, detector)
-        .await
-        .map_err(|e| {
-            error!("Inference failed for frame {}: {}", timing.sequence_id, e);
-            e.to_string()
-        })?;
+    let inference_result = {
+        let mut detector_guard = state.detector.lock().await;
+        if let Some(ref mut detector) = *detector_guard {
+            perform_inference(&timing, model_name, detector).await?
+        } else {
+            return Err("No detector available".to_string());
+        }
+    };
 
     timing.jetson_inference_complete = Some(current_timestamp_micros());
     timing.jetson_sent_result = Some(current_timestamp_micros());
 
-    info!("Sending result for frame {} to controller", timing.sequence_id);
+    info!(
+        "Sending result for frame {} to controller",
+        timing.sequence_id
+    );
 
     send_result_to_controller(&timing, inference_result)
         .await
         .map_err(|e| {
-            error!("Failed to send result to controller for frame {}: {}", timing.sequence_id, e);
+            error!(
+                "Failed to send result to controller for frame {}: {}",
+                timing.sequence_id, e
+            );
             e.to_string()
         })?;
 
-    info!("Successfully processed and sent result for frame {}", timing.sequence_id);
+    info!(
+        "Successfully processed and sent result for frame {}",
+        timing.sequence_id
+    );
 
     Ok(())
 }
@@ -201,9 +249,13 @@ async fn perform_inference(
     model_name: &str,
     detector: &mut PersistentPythonDetector,
 ) -> Result<InferenceResult, String> {
-    info!("Performing inference for frame {} with model {}", timing.sequence_id, model_name);
+    info!(
+        "Performing inference for frame {} with model {}",
+        timing.sequence_id, model_name
+    );
 
-    let (inference_result, counts) = perform_python_inference_with_counts(timing, detector, model_name, "offload").await?;
+    let (inference_result, counts) =
+        perform_python_inference_with_counts(timing, detector, model_name, "offload").await?;
 
     info!(
         "Frame {} inference complete: {} vehicles, {} pedestrians, {:.1}ms",
