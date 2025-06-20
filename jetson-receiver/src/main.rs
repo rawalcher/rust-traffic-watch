@@ -93,6 +93,7 @@ async fn handle_connection(
                     config.experiment_id, config.model_name, addr
                 );
 
+                // Phase 1: Initialize detector
                 let new_detector = match PersistentPythonDetector::new(config.model_name.clone()) {
                     Ok(detector) => {
                         info!("Detector initialized and preheated");
@@ -114,6 +115,7 @@ async fn handle_connection(
                     *config_guard = Some(config);
                 }
 
+                // Phase 2: Signal preheating complete
                 if let Err(e) = send_preheating_complete().await {
                     error!("Failed to send preheating complete: {}", e);
                     return Err(format!("Failed to send preheating complete: {}", e));
@@ -137,7 +139,7 @@ async fn handle_connection(
             }
             Ok(NetworkMessage::Frame(timing)) => {
                 let experiment_started = state.experiment_started.load(Ordering::Relaxed);
-                info!(
+                debug!(
                     "Received frame {} from {} (experiment_started: {})",
                     timing.sequence_id, addr, experiment_started
                 );
@@ -150,11 +152,12 @@ async fn handle_connection(
                 if let Some(config) = config_opt {
                     let model_name = config.model_name.clone();
 
+                    // Process the frame
                     match process_frame_and_send_result(timing, &model_name, &state).await {
                         Ok(()) => {
                             let mut frames_guard = state.frames_processed.lock().await;
                             *frames_guard += 1;
-                            info!("Successfully processed frame (total: {})", *frames_guard);
+                            debug!("Successfully processed frame (total: {})", *frames_guard);
                         }
                         Err(e) => {
                             error!("Error processing frame: {}", e);
@@ -182,7 +185,7 @@ async fn handle_connection(
         *frames_guard
     };
 
-    info!(
+    debug!(
         "Connection handler for {} finished. Total frames processed: {}",
         addr, frames_processed
     );
@@ -207,7 +210,7 @@ async fn process_frame_and_send_result(
     timing.jetson_received = Some(current_timestamp_micros());
     timing.jetson_inference_start = Some(current_timestamp_micros());
 
-    info!("Starting inference for frame {}", timing.sequence_id);
+    debug!("Starting inference for frame {}", timing.sequence_id);
 
     let inference_result = {
         let mut detector_guard = state.detector.lock().await;
@@ -221,7 +224,7 @@ async fn process_frame_and_send_result(
     timing.jetson_inference_complete = Some(current_timestamp_micros());
     timing.jetson_sent_result = Some(current_timestamp_micros());
 
-    info!(
+    debug!(
         "Sending result for frame {} to controller",
         timing.sequence_id
     );
@@ -236,7 +239,7 @@ async fn process_frame_and_send_result(
             e.to_string()
         })?;
 
-    info!(
+    debug!(
         "Successfully processed and sent result for frame {}",
         timing.sequence_id
     );
@@ -249,7 +252,7 @@ async fn perform_inference(
     model_name: &str,
     detector: &mut PersistentPythonDetector,
 ) -> Result<InferenceResult, String> {
-    info!(
+    debug!(
         "Performing inference for frame {} with model {}",
         timing.sequence_id, model_name
     );
@@ -257,7 +260,7 @@ async fn perform_inference(
     let (inference_result, counts) =
         perform_python_inference_with_counts(timing, detector, model_name, "offload").await?;
 
-    info!(
+    debug!(
         "Frame {} inference complete: {} vehicles, {} pedestrians, {:.1}ms",
         timing.sequence_id,
         counts.total_vehicles,

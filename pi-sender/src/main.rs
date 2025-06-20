@@ -155,17 +155,40 @@ async fn run_local_experiment_loop(
     while experiment_start.elapsed().as_secs() < config.duration_seconds {
         let mut timing = TimingPayload::new(sequence_id);
 
-        let frame_data = load_frame_from_image(sequence_id)?;
+        let frame_data = match load_frame_from_image(sequence_id) {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Failed to load frame {}: {}", sequence_id, e);
+                sequence_id += 1;
+                if sequence_id > MAX_FRAME_SEQUENCE {
+                    sequence_id = 1;
+                }
+                sleep(frame_interval).await;
+                continue;
+            }
+        };
+
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        let (inference_result, counts) = process_locally_with_python(&timing, &mut detector, &config.model_name).await
-            .map_err(|e| {
-                error!("Python inference failed: {}", e);
-                format!("Python inference failed: {}", e)
-            })?;
+        let (inference_result, counts) = match process_locally_with_python(&timing, &mut detector, &config.model_name).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("Python inference failed for frame {}: {}", sequence_id, e);
+                // Skip this frame and continue
+                sequence_id += 1;
+                if sequence_id > MAX_FRAME_SEQUENCE {
+                    sequence_id = 1;
+                }
+                sleep(frame_interval).await;
+                continue;
+            }
+        };
 
         let processing_time = inference_result.processing_time_us;
-        send_result_to_controller(&timing, inference_result).await?;
+
+        if let Err(e) = send_result_to_controller(&timing, inference_result).await {
+            error!("Failed to send result to controller for frame {}: {}", sequence_id, e);
+        }
 
         debug!(
             "Frame {} processed: {} vehicles, {} pedestrians, {:.1}ms",
@@ -202,21 +225,55 @@ async fn run_offload_experiment_loop(
     let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
+    let mut frames_sent = 0u64;
 
     while experiment_start.elapsed().as_secs() < config.duration_seconds {
         let mut timing = TimingPayload::new(sequence_id);
 
-        let frame_data = load_frame_from_image(sequence_id)?;
-        timing.add_frame_data(frame_data, 1920, 1080);
+        let frame_data = match load_frame_from_image(sequence_id) {
+            Ok(data) => {
+                debug!("Loaded frame {} successfully, size: {} bytes", sequence_id, data.len());
+                data
+            },
+            Err(e) => {
+                error!("Failed to load frame {}: {}", sequence_id, e);
+                // Try to continue with next frame
+                sequence_id += 1;
+                if sequence_id > MAX_FRAME_SEQUENCE {
+                    sequence_id = 1;
+                }
+                sleep(frame_interval).await;
+                continue;
+            }
+        };
 
+        timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
         timing.pi_sent_to_jetson = Some(current_timestamp_micros());
 
         let frame_message = NetworkMessage::Frame(timing);
-        send_message(&mut jetson_stream, &frame_message).await?;
 
-        debug!("Sent frame {} to Jetson", sequence_id);
+        match send_message(&mut jetson_stream, &frame_message).await {
+            Ok(()) => {
+                frames_sent += 1;
+                debug!("Sent frame {} to Jetson (total sent: {})", sequence_id, frames_sent);
+            },
+            Err(e) => {
+                error!("Failed to send frame {} to Jetson: {}", sequence_id, e);
+                // Try to reconnect
+                match TcpStream::connect(jetson_full_address()).await {
+                    Ok(new_stream) => {
+                        warn!("Reconnected to Jetson");
+                        jetson_stream = new_stream;
+                    },
+                    Err(reconnect_err) => {
+                        error!("Failed to reconnect to Jetson: {}", reconnect_err);
+                        break;
+                    }
+                }
+            }
+        }
+
         sequence_id += 1;
-
         if sequence_id > MAX_FRAME_SEQUENCE {
             sequence_id = 1;
         }
@@ -224,6 +281,7 @@ async fn run_offload_experiment_loop(
         sleep(frame_interval).await;
     }
 
+    info!("Offload experiment completed. Total frames sent: {}", frames_sent);
     Ok(())
 }
 
@@ -239,5 +297,16 @@ fn load_frame_from_image(
     frame_number: u64,
 ) -> Result<Vec<u8>, Box<dyn error::Error + Send + Sync>> {
     let filename = format!("pi-sender/sample/seq3-drone_{:07}.jpg", frame_number);
-    Ok(std::fs::read(&filename)?)
+    debug!("Attempting to load frame from: {}", filename);
+
+    match std::fs::read(&filename) {
+        Ok(data) => {
+            debug!("Successfully loaded frame {} ({} bytes)", frame_number, data.len());
+            Ok(data)
+        },
+        Err(e) => {
+            error!("Failed to read file {}: {}", filename, e);
+            Err(Box::new(e))
+        }
+    }
 }
