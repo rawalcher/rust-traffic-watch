@@ -143,9 +143,9 @@ pub async fn perform_python_inference_with_counts(
         .as_ref()
         .ok_or("No frame data in timing payload")?;
 
-    let start_time = crate::current_timestamp_micros();
+    let start_time = current_timestamp_micros();
     let result = detector.detect_objects(image_bytes)?;
-    let end_time = crate::current_timestamp_micros();
+    let end_time = current_timestamp_micros();
 
     let processing_time_us = end_time - start_time;
 
@@ -153,7 +153,7 @@ pub async fn perform_python_inference_with_counts(
         sequence_id: timing.sequence_id,
         detections: result.detections.clone(),
         processing_time_us,
-
+        pi_hostname: timing.pi_hostname.clone(),
         frame_size_bytes: image_bytes.len() as u32,
         detection_count: result.detections.len() as u32,
         image_width: result.image_width,

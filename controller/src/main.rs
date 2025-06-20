@@ -189,6 +189,7 @@ fn generate_analysis_csv(
 
     writer.write_record(&[
         "sequence_id",
+        "pi_hostname",
         "pi_capture_start",
         "pi_sent_to_jetson",
         "jetson_received",
@@ -214,6 +215,7 @@ fn generate_analysis_csv(
 
         writer.write_record(&[
             &timing.sequence_id.to_string(),
+            &timing.pi_hostname,             // NEW: Include Pi hostname
             &timing.pi_capture_start.map(|t| t.to_string()).unwrap_or_default(),
             &timing.pi_sent_to_jetson.map(|t| t.to_string()).unwrap_or_default(),
             &timing.jetson_received.map(|t| t.to_string()).unwrap_or_default(),

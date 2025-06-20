@@ -7,6 +7,7 @@ pub struct TimingPayload {
     pub frame_data: Option<Vec<u8>>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub pi_hostname: String,
     pub pi_capture_start: Option<u64>,
     pub pi_sent_to_jetson: Option<u64>,
     pub jetson_received: Option<u64>,
@@ -58,7 +59,7 @@ pub struct InferenceResult {
     pub sequence_id: u64,
     pub detections: Vec<Detection>,
     pub processing_time_us: u64,
-
+    pub pi_hostname: String,
     pub frame_size_bytes: u32,
     pub detection_count: u32,
     pub image_width: u32,
@@ -88,11 +89,13 @@ pub struct ObjectCounts {
 
 impl TimingPayload {
     pub fn new(sequence_id: u64) -> Self {
+        let hostname = get_hostname();
         Self {
             sequence_id,
             frame_data: None,
             width: None,
             height: None,
+            pi_hostname: hostname,
             pi_capture_start: Some(current_timestamp_micros()),
             pi_sent_to_jetson: None,
             jetson_received: None,
@@ -155,4 +158,15 @@ pub fn current_timestamp_micros() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_micros() as u64
+}
+
+pub fn get_hostname() -> String {
+    std::env::var("HOSTNAME")
+        .or_else(|_| {
+            std::process::Command::new("hostname")
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+                .map_err(|_| "unknown")
+        })
+        .unwrap_or_else(|_| "unknown-pi".to_string())
 }
