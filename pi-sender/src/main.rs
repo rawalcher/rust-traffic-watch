@@ -165,24 +165,29 @@ async fn local_processing(
     mut detector: PersistentPythonDetector,
     throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    let mut throughput_controller = FrameThroughputController::new(throughput_mode);
+    let throughput_controller = FrameThroughputController::new(throughput_mode);
+    let frame_skip = throughput_controller.get_frame_skip();
 
-    let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
-    let mut sequence_id = 1u64;
+    let actual_fps = 30.0 / frame_skip as f32;
+    let frame_interval = Duration::from_secs_f32(1.0 / actual_fps);
+
+    info!("Local processing: skipping every {} frames for {:.1} FPS", frame_skip, actual_fps);
+
+    let mut dataset_frame_id = 1u64;
+    let mut logical_sequence_id = 1u64;
     let mut frames_processed = 0u64;
-    let mut frames_dropped = 0u64;
     let mut experiment_start: Option<Instant> = None;
 
     loop {
-        let mut timing = TimingPayload::new(sequence_id);
+        let mut timing = TimingPayload::new(logical_sequence_id);
 
-        let frame_data = match load_frame_from_image(sequence_id) {
+        let frame_data = match load_frame_from_image(dataset_frame_id) {
             Ok(data) => data,
             Err(e) => {
-                error!("Failed to load frame {}: {}", sequence_id, e);
-                sequence_id += 1;
-                if sequence_id > MAX_FRAME_SEQUENCE {
-                    sequence_id = 1;
+                error!("Failed to load frame {}: {}", dataset_frame_id, e);
+                dataset_frame_id += frame_skip;
+                if dataset_frame_id > MAX_FRAME_SEQUENCE {
+                    dataset_frame_id = 1;
                 }
                 sleep(frame_interval).await;
                 continue;
@@ -191,60 +196,57 @@ async fn local_processing(
 
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        if throughput_controller.should_send_frame() {
-            // Start timer on first frame process
-            if experiment_start.is_none() {
-                experiment_start = Some(Instant::now());
-                info!("Starting experiment timer on first frame process");
-            }
-
-            let (inference_result, counts) = match process_locally_with_python(&timing, &mut detector, &config.model_name).await {
-                Ok(result) => result,
-                Err(e) => {
-                    error!("Python inference failed for frame {}: {}", sequence_id, e);
-                    sequence_id += 1;
-                    if sequence_id > MAX_FRAME_SEQUENCE {
-                        sequence_id = 1;
-                    }
-                    sleep(frame_interval).await;
-                    continue;
-                }
-            };
-
-            if let Err(e) = send_result_to_controller(&timing, inference_result.clone()).await {
-                error!("Failed to send result to controller for frame {}: {}", sequence_id, e);
-            }
-
-            frames_processed += 1;
-            debug!(
-                "Frame {} processed: {} vehicles, {} pedestrians, {:.1}ms",
-                sequence_id,
-                counts.total_vehicles,
-                counts.pedestrians,
-                inference_result.processing_time_us as f64 / 1000.0
-            );
-        } else {
-            frames_dropped += 1;
-            debug!("Dropped frame {} (FPS mode)", sequence_id);
+        if experiment_start.is_none() {
+            experiment_start = Some(Instant::now());
+            info!("Starting experiment timer on first frame process");
         }
 
-        // Check if experiment duration is complete (only after first frame)
+        let (inference_result, counts) = match process_locally_with_python(&timing, &mut detector, &config.model_name).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("Python inference failed for frame {}: {}", dataset_frame_id, e);
+                dataset_frame_id += frame_skip;
+                logical_sequence_id += 1;
+                if dataset_frame_id > MAX_FRAME_SEQUENCE {
+                    dataset_frame_id = 1;
+                }
+                sleep(frame_interval).await;
+                continue;
+            }
+        };
+
+        if let Err(e) = send_result_to_controller(&timing, inference_result.clone()).await {
+            error!("Failed to send result to controller for frame {}: {}", dataset_frame_id, e);
+        }
+
+        frames_processed += 1;
+        debug!(
+            "Frame {} (dataset frame {}) processed: {} vehicles, {} pedestrians, {:.1}ms",
+            logical_sequence_id,
+            dataset_frame_id,
+            counts.total_vehicles,
+            counts.pedestrians,
+            inference_result.processing_time_us as f64 / 1000.0
+        );
+
         if let Some(start_time) = experiment_start {
             if start_time.elapsed().as_secs() >= config.duration_seconds {
                 break;
             }
         }
 
-        sequence_id += 1;
-        if sequence_id > MAX_FRAME_SEQUENCE {
-            sequence_id = 1;
+        dataset_frame_id += frame_skip;
+        logical_sequence_id += 1;
+
+        if dataset_frame_id > MAX_FRAME_SEQUENCE {
+            dataset_frame_id = 1;
         }
 
         sleep(frame_interval).await;
     }
 
     detector.shutdown().map_err(|e| format!("Failed to shutdown detector: {}", e))?;
-    info!("Local processing completed. Processed: {}, dropped: {}", frames_processed, frames_dropped);
+    info!("Local processing completed. Processed: {} frames", frames_processed);
     Ok(())
 }
 
@@ -255,24 +257,30 @@ async fn offloading(
     let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
     info!("Connected to Jetson at {}", jetson_full_address());
 
-    let mut throughput_controller = FrameThroughputController::new(throughput_mode);
+    let throughput_controller = FrameThroughputController::new(throughput_mode);
+    let frame_skip = throughput_controller.get_frame_skip();
 
-    let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
-    let mut sequence_id = 1u64;
+    let actual_fps = 30.0 / frame_skip as f32;
+    let frame_interval = Duration::from_secs_f32(1.0 / actual_fps);
+
+    info!("Offloading: skipping every {} frames for {:.1} FPS", frame_skip, actual_fps);
+
+    let mut dataset_frame_id = 1u64;
+    let mut logical_sequence_id = 1u64;
     let mut frames_sent = 0u64;
-    let mut frames_dropped = 0u64;
     let mut experiment_start: Option<Instant> = None;
 
     loop {
-        let mut timing = TimingPayload::new(sequence_id);
+        let mut timing = TimingPayload::new(logical_sequence_id);
 
-        let frame_data = match load_frame_from_image(sequence_id) {
+        let frame_data = match load_frame_from_image(dataset_frame_id) {
             Ok(data) => data,
             Err(e) => {
-                error!("Failed to load frame {}: {}", sequence_id, e);
-                sequence_id += 1;
-                if sequence_id > MAX_FRAME_SEQUENCE {
-                    sequence_id = 1;
+                error!("Failed to load frame {}: {}", dataset_frame_id, e);
+                dataset_frame_id += frame_skip;
+                logical_sequence_id += 1;
+                if dataset_frame_id > MAX_FRAME_SEQUENCE {
+                    dataset_frame_id = 1;
                 }
                 sleep(frame_interval).await;
                 continue;
@@ -281,57 +289,52 @@ async fn offloading(
 
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        // Check if we should send this frame
-        if throughput_controller.should_send_frame() {
-            // Start timer on first frame send
-            if experiment_start.is_none() {
-                experiment_start = Some(Instant::now());
-                info!("Starting experiment timer on first frame send");
-            }
+        if experiment_start.is_none() {
+            experiment_start = Some(Instant::now());
+            info!("Starting experiment timer on first frame send");
+        }
 
-            timing.pi_sent_to_jetson = Some(current_timestamp_micros());
-            let frame_message = NetworkMessage::Frame(timing);
+        timing.pi_sent_to_jetson = Some(current_timestamp_micros());
+        let frame_message = NetworkMessage::Frame(timing);
 
-            match send_message(&mut jetson_stream, &frame_message).await {
-                Ok(()) => {
-                    frames_sent += 1;
-                    debug!("Sent frame {} to Jetson (total sent: {})", sequence_id, frames_sent);
-                },
-                Err(e) => {
-                    error!("Failed to send frame {} to Jetson: {}", sequence_id, e);
-                    match TcpStream::connect(jetson_full_address()).await {
-                        Ok(new_stream) => {
-                            warn!("Reconnected to Jetson");
-                            jetson_stream = new_stream;
-                        },
-                        Err(reconnect_err) => {
-                            error!("Failed to reconnect to Jetson: {}", reconnect_err);
-                            break;
-                        }
+        match send_message(&mut jetson_stream, &frame_message).await {
+            Ok(()) => {
+                frames_sent += 1;
+                debug!("Sent frame {} (dataset frame {}) to Jetson (total sent: {})", 
+                      logical_sequence_id, dataset_frame_id, frames_sent);
+            },
+            Err(e) => {
+                error!("Failed to send frame {} to Jetson: {}", dataset_frame_id, e);
+                match TcpStream::connect(jetson_full_address()).await {
+                    Ok(new_stream) => {
+                        warn!("Reconnected to Jetson");
+                        jetson_stream = new_stream;
+                    },
+                    Err(reconnect_err) => {
+                        error!("Failed to reconnect to Jetson: {}", reconnect_err);
+                        break;
                     }
                 }
             }
-        } else {
-            frames_dropped += 1;
-            debug!("Dropped frame {} (FPS mode)", sequence_id);
         }
 
-        // Check if experiment duration is complete (only after first frame)
         if let Some(start_time) = experiment_start {
             if start_time.elapsed().as_secs() >= config.duration_seconds {
                 break;
             }
         }
 
-        sequence_id += 1;
-        if sequence_id > MAX_FRAME_SEQUENCE {
-            sequence_id = 1;
+        dataset_frame_id += frame_skip;
+        logical_sequence_id += 1;
+
+        if dataset_frame_id > MAX_FRAME_SEQUENCE {
+            dataset_frame_id = 1;
         }
 
         sleep(frame_interval).await;
     }
 
-    info!("Offloading completed. Sent: {}, dropped: {}", frames_sent, frames_dropped);
+    info!("Offloading completed. Sent: {} frames", frames_sent);
     Ok(())
 }
 

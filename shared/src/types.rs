@@ -25,38 +25,21 @@ pub enum ThroughputMode {
 
 pub struct FrameThroughputController {
     mode: ThroughputMode,
-    frame_skip_count: u64,
-    frames_seen: u64,
 }
 
 impl FrameThroughputController {
     pub fn new(mode: ThroughputMode) -> Self {
-        let source_fps = 30.0;
-        let target_fps = 1.0;
-        let frame_skip_count = (source_fps / target_fps) as u64;
-
-        Self {
-            mode,
-            frame_skip_count,
-            frames_seen: 0,
-        }
+        Self { mode }
     }
 
     pub fn set_mode(&mut self, mode: ThroughputMode) {
         self.mode = mode;
     }
 
-    pub fn should_send_frame(&mut self) -> bool {
-        self.frames_seen += 1;
-
+    pub fn get_frame_skip(&self) -> u64 {
         match self.mode {
-            ThroughputMode::High => {
-                true
-            }
-            ThroughputMode::Fps => {
-                // FPS mode: only send every 30th frame (1fps from 30fps source)
-                (self.frames_seen - 1) % self.frame_skip_count == 0
-            }
+            ThroughputMode::High => 3,
+            ThroughputMode::Fps => 30,
         }
     }
 }
