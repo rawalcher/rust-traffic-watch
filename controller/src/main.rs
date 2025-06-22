@@ -168,11 +168,12 @@ async fn run_experiment(
 
     info!("Sent shutdown signals to all devices");
 
-    let final_results = std::sync::Arc::try_unwrap(results)
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    let final_results = {
+        let results_guard = results.lock().unwrap();
+        results_guard.clone()
+    };
 
+    info!("Collected {} total results", final_results.len());
     Ok(final_results)
 }
 
