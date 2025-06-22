@@ -43,24 +43,30 @@ impl PersistentPythonDetector {
             })?;
 
         let stdout = process.stdout.as_mut().unwrap();
-        let mut reader = BufReader::new(stdout);
-        let mut ready_line = String::new();
+        let reader = BufReader::new(stdout);
 
-        reader.read_line(&mut ready_line)
-            .map_err(|e| {
-                error!("Failed to read ready signal: {}", e);
-                format!("Failed to read ready signal: {}", e)
-            })?;
-
-        if ready_line.trim() != "READY" {
-            let err = format!("Expected READY signal, got: {}", ready_line.trim());
-            error!("{}", err);
-            return Err(err);
+        for line in reader.lines() {
+            match line {
+                Ok(line_text) => {
+                    let line_trimmed = line_text.trim();
+                    if line_trimmed.contains("READY") {
+                        debug!("Python detector ready");
+                        break;
+                    } else {
+                        debug!("Startup output: {}", line_trimmed);
+                    }
+                }
+                Err(e) => {
+                    let err = format!("Error reading from Python stdout: {}", e);
+                    error!("{}", err);
+                    return Err(err);
+                }
+            }
         }
 
-        debug!("Python detector ready");
         Ok(Self { process })
     }
+
 
     pub fn detect_objects(&mut self, image_bytes: &[u8]) -> Result<PythonDetectionResult, String> {
         self.send_image(image_bytes)?;
