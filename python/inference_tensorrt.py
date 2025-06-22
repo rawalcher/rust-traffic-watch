@@ -144,7 +144,9 @@ class PersistentTRTInferenceServer:
                 })
 
 def main():
-    engine_path = sys.argv[1] if len(sys.argv) > 1 else 'yolov5s.engine'
+    model_name = sys.argv[1] if len(sys.argv) > 1 else 'yolov5s'
+    engine_path = f"{model_name}_trt.engine"
+
     server = PersistentTRTInferenceServer(engine_path)
     server.run_server()
 
