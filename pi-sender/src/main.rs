@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 use log::{info, debug, error, warn};
-use shared::constants::{jetson_full_address, pi_bind_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, CONTROLLER_PORT};
+use shared::constants::{jetson_full_address, pi_bind_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, CONTROLLER_PORT, INFERENCE_PYTORCH_PATH};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
@@ -69,12 +69,20 @@ async fn run_local_experiment_with_preheating(
     info!("LOCAL MODE: Starting preheating phase...");
 
     // Phase 1: Preheating - Initialize detector (YOLOv5 will handle warmup automatically)
-    let detector = PersistentPythonDetector::new(config.model_name.clone())
-        .map_err(|e| {
+    let detector = match PersistentPythonDetector::new(
+        config.model_name.clone(),
+        INFERENCE_PYTORCH_PATH.to_string()
+    ) {
+        Ok(detector) => {
+            info!("Detector initialized and preheated");
+            detector
+        }
+        Err(e) => {
             error!("Failed to initialize detector: {}", e);
-            format!("Failed to initialize Python detector: {}", e)
-        })?;
-
+            return Err(format!("Failed to initialize detector: {}", e).into());
+        }
+    };
+    
     info!("Detector initialized and preheated");
 
     // Phase 2: Signal preheating complete

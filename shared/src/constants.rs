@@ -7,7 +7,7 @@ pub const JETSON_ADDRESS: &str = "192.168.68.64";
 pub const CONTROLLER_ADDRESS: &str = "192.168.68.70";
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
-pub const DEFAULT_DURATION_SECONDS: u64 = 900; // 15 minutes
+pub const DEFAULT_DURATION_SECONDS: u64 = 120;
 pub const DEFAULT_FPS: f32 = 10.0;
 
 pub const MAX_FRAME_SEQUENCE: u64 = 900;
@@ -15,7 +15,8 @@ pub const FRAME_WIDTH: u32 = 1920;
 pub const FRAME_HEIGHT: u32 = 1080;
 
 pub const PYTHON_VENV_PATH: &str = "python3";
-pub const PYTHON_SCRIPT_PATH: &str = "python/python_inference.py";
+pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
+pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
 
 pub fn pi_full_address() -> String {
     format!("{}:{}", PI_ADDRESS, PI_PORT)

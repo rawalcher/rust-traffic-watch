@@ -1,5 +1,5 @@
 use log::{debug, error, info, warn};
-use shared::constants::{jetson_bind_address, CONTROLLER_ADDRESS, CONTROLLER_PORT, JETSON_PORT};
+use shared::constants::{jetson_bind_address, CONTROLLER_ADDRESS, CONTROLLER_PORT, INFERENCE_TENSORRT_PATH, JETSON_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
     send_result_to_controller, ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
@@ -94,7 +94,7 @@ async fn handle_connection(
                 );
 
                 // Phase 1: Initialize detector
-                let new_detector = match PersistentPythonDetector::new(config.model_name.clone()) {
+                let new_detector = match PersistentPythonDetector::new(config.model_name.clone(), INFERENCE_TENSORRT_PATH.to_string()) {
                     Ok(detector) => {
                         info!("Detector initialized and preheated");
                         detector

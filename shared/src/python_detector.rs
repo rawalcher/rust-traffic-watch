@@ -3,7 +3,7 @@ use std::process::{Child, Command, Stdio};
 use serde::{Deserialize, Serialize};
 use crate::types::*;
 use log::{debug, error};
-use crate::constants::{PYTHON_SCRIPT_PATH, PYTHON_VENV_PATH};
+use crate::constants::{PYTHON_VENV_PATH};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PythonDetectionResult {
@@ -27,11 +27,11 @@ pub struct PersistentPythonDetector {
 }
 
 impl PersistentPythonDetector {
-    pub fn new(model_name: String) -> Result<Self, String> {
+    pub fn new(model_name: String, script_path: String) -> Result<Self, String> {
         debug!("Starting Python detector with model: {}", model_name);
 
         let mut process = Command::new(PYTHON_VENV_PATH)
-            .arg(PYTHON_SCRIPT_PATH)
+            .arg(script_path)
             .arg(&model_name)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
