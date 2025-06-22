@@ -1,19 +1,23 @@
-use std::error;
 use csv::Writer;
 use log::{debug, error, info, warn};
+use shared::constants::{
+    controller_bind_address, jetson_full_address, pi_full_address, CONTROLLER_PORT, DEFAULT_MODEL,
+};
 use shared::{
     current_timestamp_micros, receive_message, send_message, ControlMessage, ExperimentConfig,
     ExperimentMode, NetworkMessage, ProcessingResult,
 };
 use std::env;
+use std::error;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{sleep, Duration, Instant, timeout};
-use shared::constants::{controller_bind_address, jetson_full_address, pi_full_address, CONTROLLER_PORT, DEFAULT_MODEL};
+use tokio::time::{sleep, timeout, Duration, Instant};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     if env::var("RUST_LOG").is_err() {
-        unsafe { env::set_var("RUST_LOG", "info"); }
+        unsafe {
+            env::set_var("RUST_LOG", "info");
+        }
     }
     env_logger::init();
 
@@ -43,7 +47,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
         let config = ExperimentConfig::new(experiment_id.clone(), mode.clone(), model_name.clone());
 
-        let results = run_experiment_with_preheating(config).await?;
+        let results = run_experiment(config).await?;
         generate_analysis_csv(&results, &experiment_id)?;
 
         info!(
@@ -59,10 +63,13 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     Ok(())
 }
 
-async fn run_experiment_with_preheating(
+async fn run_experiment(
     config: ExperimentConfig,
 ) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
-    info!("Starting preheating phase for experiment: {}", config.experiment_id);
+    info!(
+        "Starting preheating phase for experiment: {}",
+        config.experiment_id
+    );
 
     let listener = TcpListener::bind(controller_bind_address()).await?;
     debug!("Listening on port {}", CONTROLLER_PORT);
@@ -130,26 +137,22 @@ async fn run_experiment_with_preheating(
     info!("Experiment started - collecting results...");
 
     // Phase 4: Collect experiment results
-    let mut results = Vec::new();
+    let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let experiment_start = Instant::now();
 
     while experiment_start.elapsed().as_secs() < config.duration_seconds {
         tokio::select! {
             accept_result = listener.accept() => {
-                if let Ok((mut stream, addr)) = accept_result {
-                    debug!("Received connection from {}", addr);
+                if let Ok((stream, addr)) = accept_result {
+                    debug!("New connection from {}", addr);
 
-                    if let Ok(message) = receive_message::<ControlMessage>(&mut stream).await {
-                        if let ControlMessage::ProcessingResult(mut result) = message {
-                            result.timing.controller_received = Some(current_timestamp_micros());
-                            results.push(result);
-
-                            debug!("Received result for frame {}", results.len());
-                        }
-                    }
+                    let results_clone = std::sync::Arc::clone(&results);
+                    tokio::spawn(async move {
+                        handle_result_connection(stream, addr, results_clone).await;
+                    });
                 }
             }
-            _ = sleep(Duration::from_millis(100)) => {
+            _ = sleep(Duration::from_millis(50)) => {
                 // Continue listening
             }
         }
@@ -165,7 +168,47 @@ async fn run_experiment_with_preheating(
 
     info!("Sent shutdown signals to all devices");
 
-    Ok(results)
+    let final_results = std::sync::Arc::try_unwrap(results)
+        .unwrap()
+        .into_inner()
+        .unwrap();
+
+    Ok(final_results)
+}
+
+async fn handle_result_connection(
+    mut stream: TcpStream,
+    addr: std::net::SocketAddr,
+    results: std::sync::Arc<std::sync::Mutex<Vec<ProcessingResult>>>,
+) {
+    info!("Handling persistent result connection from {}", addr);
+    let mut frame_count = 0;
+
+    loop {
+        match receive_message::<ControlMessage>(&mut stream).await {
+            Ok(ControlMessage::ProcessingResult(mut result)) => {
+                result.timing.controller_received = Some(current_timestamp_micros());
+
+                {
+                    let mut results_guard = results.lock().unwrap();
+                    results_guard.push(result);
+                    frame_count += 1;
+                }
+
+                debug!("Received result {} from {}", frame_count, addr);
+            }
+            Ok(other_msg) => {
+                debug!("Unexpected message from {}: {:?}", addr, other_msg);
+            }
+            Err(e) => {
+                info!(
+                    "Result connection from {} ended after {} frames: {}",
+                    addr, frame_count, e
+                );
+                break;
+            }
+        }
+    }
 }
 
 fn generate_analysis_csv(
@@ -215,18 +258,48 @@ fn generate_analysis_csv(
 
         writer.write_record(&[
             &timing.sequence_id.to_string(),
-            &timing.pi_hostname,             // NEW: Include Pi hostname
-            &timing.pi_capture_start.map(|t| t.to_string()).unwrap_or_default(),
-            &timing.pi_sent_to_jetson.map(|t| t.to_string()).unwrap_or_default(),
-            &timing.jetson_received.map(|t| t.to_string()).unwrap_or_default(),
-            &timing.jetson_inference_start.map(|t| t.to_string()).unwrap_or_default(),
-            &timing.jetson_inference_complete.map(|t| t.to_string()).unwrap_or_default(),
-            &timing.jetson_sent_result.map(|t| t.to_string()).unwrap_or_default(),
-            &timing.controller_received.map(|t| t.to_string()).unwrap_or_default(),
-            &timing.pi_overhead_us().map(|t| t.to_string()).unwrap_or_default(),
-            &timing.network_latency_us().map(|t| t.to_string()).unwrap_or_default(),
+            &timing.pi_hostname, // NEW: Include Pi hostname
+            &timing
+                .pi_capture_start
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .pi_sent_to_jetson
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .jetson_received
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .jetson_inference_start
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .jetson_inference_complete
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .jetson_sent_result
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .controller_received
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .pi_overhead_us()
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            &timing
+                .network_latency_us()
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
             &inference.processing_time_us.to_string(),
-            &timing.total_latency_us().map(|t| t.to_string()).unwrap_or_default(),
+            &timing
+                .total_latency_us()
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
             &inference.frame_size_bytes.to_string(),
             &inference.detection_count.to_string(),
             &inference.image_width.to_string(),
