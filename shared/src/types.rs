@@ -1,4 +1,3 @@
-use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_FPS};
 
@@ -26,11 +25,7 @@ pub enum ThroughputMode {
 
 pub struct FrameThroughputController {
     mode: ThroughputMode,
-    last_frame_time: Option<Instant>,
-    frame_interval: std::time::Duration,
-    source_fps: f32,          
-    target_fps: f32,         
-    frame_skip_count: u64,   
+    frame_skip_count: u64,
     frames_seen: u64,
 }
 
@@ -42,10 +37,6 @@ impl FrameThroughputController {
 
         Self {
             mode,
-            last_frame_time: None,
-            frame_interval: std::time::Duration::from_secs(1),
-            source_fps,
-            target_fps,
             frame_skip_count,
             frames_seen: 0,
         }
