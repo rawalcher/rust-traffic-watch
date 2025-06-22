@@ -3,6 +3,7 @@ use shared::{
     current_timestamp_micros, receive_message, send_message, send_result_to_controller,
     ControlMessage, ExperimentConfig, ExperimentMode, InferenceResult, NetworkMessage,
     TimingPayload, PersistentPythonDetector, perform_python_inference_with_counts,
+    ThroughputMode, FrameThroughputController, // Add these imports
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -33,17 +34,23 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
         match message {
             NetworkMessage::Control(ControlMessage::StartExperiment { config }) => {
+                let throughput_mode = if std::env::args().any(|arg| arg == "--fps-mode") {
+                    ThroughputMode::Fps
+                } else {
+                    ThroughputMode::High
+                };
+
                 info!(
-                    "Starting preheating for experiment: {} in mode {:?} with model {}",
-                    config.experiment_id, config.mode, config.model_name
+                    "Starting experiment: {} in mode {:?} with model {} (throughput: {:?})",
+                    config.experiment_id, config.mode, config.model_name, throughput_mode
                 );
 
                 match config.mode {
                     ExperimentMode::LocalOnly => {
-                        run_local_experiment_with_preheating(config, stream).await?;
+                        run_local_experiment_with_preheating(config, stream, throughput_mode).await?;
                     }
                     ExperimentMode::Offload => {
-                        run_offload_experiment_with_preheating(config, stream).await?;
+                        run_offload_experiment_with_preheating(config, stream, throughput_mode).await?;
                     }
                 }
             }
@@ -65,10 +72,11 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 async fn run_local_experiment_with_preheating(
     config: ExperimentConfig,
     mut controller_stream: TcpStream,
+    throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("LOCAL MODE: Starting preheating phase...");
 
-    // Phase 1: Preheating - Initialize detector (YOLOv5 will handle warmup automatically)
+    // Phase 1: Preheating - Initialize detector
     let detector = match PersistentPythonDetector::new(
         config.model_name.clone(),
         INFERENCE_PYTORCH_PATH.to_string()
@@ -82,8 +90,6 @@ async fn run_local_experiment_with_preheating(
             return Err(format!("Failed to initialize detector: {}", e).into());
         }
     };
-    
-    info!("Detector initialized and preheated");
 
     // Phase 2: Signal preheating complete
     send_preheating_complete().await?;
@@ -92,8 +98,8 @@ async fn run_local_experiment_with_preheating(
     wait_for_experiment_start_on_stream(&mut controller_stream).await?;
 
     // Phase 4: Run actual experiment
-    info!("Starting LOCAL experiment - Pi processes frames locally");
-    run_local_experiment_loop(config, detector).await?;
+    info!("Starting LOCAL experiment with {:?} mode", throughput_mode);
+    local_processing(config, detector, throughput_mode).await?;
 
     Ok(())
 }
@@ -101,6 +107,7 @@ async fn run_local_experiment_with_preheating(
 async fn run_offload_experiment_with_preheating(
     config: ExperimentConfig,
     mut controller_stream: TcpStream,
+    throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("OFFLOAD MODE: Starting preheating phase...");
 
@@ -112,8 +119,8 @@ async fn run_offload_experiment_with_preheating(
     wait_for_experiment_start_on_stream(&mut controller_stream).await?;
 
     // Phase 3: Run actual experiment
-    info!("Starting OFFLOAD experiment - Pi sends frames to Jetson");
-    run_offload_experiment_loop(config).await?;
+    info!("Starting OFFLOAD experiment with {:?} mode", throughput_mode);
+    offloading(config, throughput_mode).await?;
 
     Ok(())
 }
@@ -152,13 +159,18 @@ async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + 
     Ok(())
 }
 
-async fn run_local_experiment_loop(
+async fn local_processing(
     config: ExperimentConfig,
     mut detector: PersistentPythonDetector,
+    throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    let mut throughput_controller = FrameThroughputController::new(throughput_mode);
+
     let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
+    let mut frames_processed = 0u64;
+    let mut frames_dropped = 0u64;
 
     while experiment_start.elapsed().as_secs() < config.duration_seconds {
         let mut timing = TimingPayload::new(sequence_id);
@@ -178,36 +190,39 @@ async fn run_local_experiment_loop(
 
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        let (inference_result, counts) = match process_locally_with_python(&timing, &mut detector, &config.model_name).await {
-            Ok(result) => result,
-            Err(e) => {
-                error!("Python inference failed for frame {}: {}", sequence_id, e);
-                // Skip this frame and continue
-                sequence_id += 1;
-                if sequence_id > MAX_FRAME_SEQUENCE {
-                    sequence_id = 1;
+        // Check if we should process this frame
+        if throughput_controller.should_send_frame() {
+            let (inference_result, counts) = match process_locally_with_python(&timing, &mut detector, &config.model_name).await {
+                Ok(result) => result,
+                Err(e) => {
+                    error!("Python inference failed for frame {}: {}", sequence_id, e);
+                    sequence_id += 1;
+                    if sequence_id > MAX_FRAME_SEQUENCE {
+                        sequence_id = 1;
+                    }
+                    sleep(frame_interval).await;
+                    continue;
                 }
-                sleep(frame_interval).await;
-                continue;
+            };
+
+            if let Err(e) = send_result_to_controller(&timing, inference_result.clone()).await {
+                error!("Failed to send result to controller for frame {}: {}", sequence_id, e);
             }
-        };
 
-        let processing_time = inference_result.processing_time_us;
-
-        if let Err(e) = send_result_to_controller(&timing, inference_result).await {
-            error!("Failed to send result to controller for frame {}: {}", sequence_id, e);
+            frames_processed += 1;
+            debug!(
+                "Frame {} processed: {} vehicles, {} pedestrians, {:.1}ms",
+                sequence_id,
+                counts.total_vehicles,
+                counts.pedestrians,
+                inference_result.processing_time_us as f64 / 1000.0
+            );
+        } else {
+            frames_dropped += 1;
+            debug!("Dropped frame {} (FPS mode)", sequence_id);
         }
 
-        debug!(
-            "Frame {} processed: {} vehicles, {} pedestrians, {:.1}ms",
-            sequence_id,
-            counts.total_vehicles,
-            counts.pedestrians,
-            processing_time as f64 / 1000.0
-        );
-
         sequence_id += 1;
-
         if sequence_id > MAX_FRAME_SEQUENCE {
             sequence_id = 1;
         }
@@ -215,37 +230,33 @@ async fn run_local_experiment_loop(
         sleep(frame_interval).await;
     }
 
-    detector.shutdown().map_err(|e| {
-        error!("Failed to shutdown detector: {}", e);
-        format!("Failed to shutdown detector: {}", e)
-    })?;
-
-    debug!("Detector shut down");
+    detector.shutdown().map_err(|e| format!("Failed to shutdown detector: {}", e))?;
+    info!("Local processing completed. Processed: {}, dropped: {}", frames_processed, frames_dropped);
     Ok(())
 }
 
-async fn run_offload_experiment_loop(
+async fn offloading(
     config: ExperimentConfig,
+    throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
     info!("Connected to Jetson at {}", jetson_full_address());
+
+    let mut throughput_controller = FrameThroughputController::new(throughput_mode);
 
     let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
     let mut frames_sent = 0u64;
+    let mut frames_dropped = 0u64;
 
     while experiment_start.elapsed().as_secs() < config.duration_seconds {
         let mut timing = TimingPayload::new(sequence_id);
 
         let frame_data = match load_frame_from_image(sequence_id) {
-            Ok(data) => {
-                debug!("Loaded frame {} successfully, size: {} bytes", sequence_id, data.len());
-                data
-            },
+            Ok(data) => data,
             Err(e) => {
                 error!("Failed to load frame {}: {}", sequence_id, e);
-                // Try to continue with next frame
                 sequence_id += 1;
                 if sequence_id > MAX_FRAME_SEQUENCE {
                     sequence_id = 1;
@@ -256,29 +267,34 @@ async fn run_offload_experiment_loop(
         };
 
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
-        timing.pi_sent_to_jetson = Some(current_timestamp_micros());
 
-        let frame_message = NetworkMessage::Frame(timing);
+        // Check if we should send this frame
+        if throughput_controller.should_send_frame() {
+            timing.pi_sent_to_jetson = Some(current_timestamp_micros());
+            let frame_message = NetworkMessage::Frame(timing);
 
-        match send_message(&mut jetson_stream, &frame_message).await {
-            Ok(()) => {
-                frames_sent += 1;
-                debug!("Sent frame {} to Jetson (total sent: {})", sequence_id, frames_sent);
-            },
-            Err(e) => {
-                error!("Failed to send frame {} to Jetson: {}", sequence_id, e);
-                // Try to reconnect
-                match TcpStream::connect(jetson_full_address()).await {
-                    Ok(new_stream) => {
-                        warn!("Reconnected to Jetson");
-                        jetson_stream = new_stream;
-                    },
-                    Err(reconnect_err) => {
-                        error!("Failed to reconnect to Jetson: {}", reconnect_err);
-                        break;
+            match send_message(&mut jetson_stream, &frame_message).await {
+                Ok(()) => {
+                    frames_sent += 1;
+                    debug!("Sent frame {} to Jetson (total sent: {})", sequence_id, frames_sent);
+                },
+                Err(e) => {
+                    error!("Failed to send frame {} to Jetson: {}", sequence_id, e);
+                    match TcpStream::connect(jetson_full_address()).await {
+                        Ok(new_stream) => {
+                            warn!("Reconnected to Jetson");
+                            jetson_stream = new_stream;
+                        },
+                        Err(reconnect_err) => {
+                            error!("Failed to reconnect to Jetson: {}", reconnect_err);
+                            break;
+                        }
                     }
                 }
             }
+        } else {
+            frames_dropped += 1;
+            debug!("Dropped frame {} (FPS mode)", sequence_id);
         }
 
         sequence_id += 1;
@@ -289,7 +305,7 @@ async fn run_offload_experiment_loop(
         sleep(frame_interval).await;
     }
 
-    info!("Offload experiment completed. Total frames sent: {}", frames_sent);
+    info!("Offloading completed. Sent: {}, dropped: {}", frames_sent, frames_dropped);
     Ok(())
 }
 

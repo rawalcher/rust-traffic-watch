@@ -1,3 +1,4 @@
+use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_FPS};
 
@@ -15,6 +16,58 @@ pub struct TimingPayload {
     pub jetson_inference_complete: Option<u64>,
     pub jetson_sent_result: Option<u64>,
     pub controller_received: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ThroughputMode {
+    High,
+    Fps,
+}
+
+pub struct FrameThroughputController {
+    mode: ThroughputMode,
+    last_frame_time: Option<Instant>,
+    frame_interval: std::time::Duration,
+}
+
+impl FrameThroughputController {
+    pub fn new(mode: ThroughputMode) -> Self {
+        Self {
+            mode,
+            last_frame_time: None,
+            frame_interval: std::time::Duration::from_secs(1),
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: ThroughputMode) {
+        self.mode = mode;
+    }
+
+    pub fn should_send_frame(&mut self) -> bool {
+        let now = Instant::now();
+
+        match self.mode {
+            ThroughputMode::High => {
+                true
+            }
+            ThroughputMode::Fps => {
+                match self.last_frame_time {
+                    None => {
+                        self.last_frame_time = Some(now);
+                        true
+                    }
+                    Some(last_time) => {
+                        if now.duration_since(last_time) >= self.frame_interval {
+                            self.last_frame_time = Some(now);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
