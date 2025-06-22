@@ -165,13 +165,9 @@ async fn local_processing(
     mut detector: PersistentPythonDetector,
     throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    let mut throughput_controller = FrameThroughputController::new(throughput_mode.clone());
+    let mut throughput_controller = FrameThroughputController::new(throughput_mode);
 
-    let frame_interval = match throughput_mode {
-        ThroughputMode::High => Duration::from_secs_f32(1.0 / config.fixed_fps), // Normal interval
-        ThroughputMode::Fps => Duration::from_secs(1), // 1 second interval for 1fps
-    };
-
+    let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
     let mut frames_processed = 0u64;
     let mut frames_dropped = 0u64;
@@ -259,13 +255,9 @@ async fn offloading(
     let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
     info!("Connected to Jetson at {}", jetson_full_address());
 
-    let mut throughput_controller = FrameThroughputController::new(throughput_mode.clone());
+    let mut throughput_controller = FrameThroughputController::new(throughput_mode);
 
-    let frame_interval = match throughput_mode {
-        ThroughputMode::High => Duration::from_secs_f32(1.0 / config.fixed_fps), 
-        ThroughputMode::Fps => Duration::from_secs(1),
-    };
-
+    let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
     let mut frames_sent = 0u64;
     let mut frames_dropped = 0u64;
