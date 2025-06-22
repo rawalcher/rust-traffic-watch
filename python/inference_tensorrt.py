@@ -53,7 +53,12 @@ class PersistentTRTInferenceServer:
     def preprocess(self, image_bytes):
         img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         height, width = img.shape[:2]
-        img_resized = cv2.resize(img, self.model_input_size)
+
+        if width != 640 or height != 640:
+            img_resized = cv2.resize(img, (640, 640))
+        else:
+            img_resized = img
+
         img_input = img_resized.astype(np.float32) / 255.0
         img_input = img_input.transpose((2, 0, 1))  # HWC → CHW
         img_input = np.expand_dims(img_input, axis=0)

@@ -1,4 +1,5 @@
 use std::error;
+use std::io::Cursor;
 use shared::{
     current_timestamp_micros, receive_message, send_message, send_result_to_controller,
     ControlMessage, ExperimentConfig, ExperimentMode, InferenceResult, NetworkMessage,
@@ -7,6 +8,7 @@ use shared::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use image::{ImageFormat, ImageReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 use log::{info, debug, error, warn};
@@ -352,14 +354,30 @@ fn load_frame_from_image(
     let filename = format!("pi-sender/sample/seq3-drone_{:07}.jpg", frame_number);
     debug!("Attempting to load frame from: {}", filename);
 
-    match std::fs::read(&filename) {
-        Ok(data) => {
-            debug!("Successfully loaded frame {} ({} bytes)", frame_number, data.len());
-            Ok(data)
-        },
-        Err(e) => {
-            error!("Failed to read file {}: {}", filename, e);
-            Err(Box::new(e))
-        }
-    }
+    let original_data = std::fs::read(&filename)?;
+    debug!("Loaded original frame {} ({} bytes)", frame_number, original_data.len());
+
+    let img = ImageReader::new(Cursor::new(&original_data))
+        .with_guessed_format()?
+        .decode()?;
+
+    debug!("Original image dimensions: {}x{}", img.width(), img.height());
+
+    let resized = img.resize_exact(640, 640, image::imageops::FilterType::Lanczos3);
+
+    let mut output_buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut output_buffer);
+
+    resized.write_to(&mut cursor, ImageFormat::Jpeg)?;
+
+    debug!(
+        "Resized frame {} from {} bytes to {} bytes ({}x{} -> 640x640)",
+        frame_number,
+        original_data.len(),
+        output_buffer.len(),
+        img.width(),
+        img.height()
+    );
+
+    Ok(output_buffer)
 }
