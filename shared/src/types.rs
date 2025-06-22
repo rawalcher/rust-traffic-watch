@@ -28,14 +28,26 @@ pub struct FrameThroughputController {
     mode: ThroughputMode,
     last_frame_time: Option<Instant>,
     frame_interval: std::time::Duration,
+    source_fps: f32,          
+    target_fps: f32,         
+    frame_skip_count: u64,   
+    frames_seen: u64,
 }
 
 impl FrameThroughputController {
     pub fn new(mode: ThroughputMode) -> Self {
+        let source_fps = 30.0;
+        let target_fps = 1.0;
+        let frame_skip_count = (source_fps / target_fps) as u64;
+
         Self {
             mode,
             last_frame_time: None,
             frame_interval: std::time::Duration::from_secs(1),
+            source_fps,
+            target_fps,
+            frame_skip_count,
+            frames_seen: 0,
         }
     }
 
@@ -44,27 +56,15 @@ impl FrameThroughputController {
     }
 
     pub fn should_send_frame(&mut self) -> bool {
-        let now = Instant::now();
+        self.frames_seen += 1;
 
         match self.mode {
             ThroughputMode::High => {
                 true
             }
             ThroughputMode::Fps => {
-                match self.last_frame_time {
-                    None => {
-                        self.last_frame_time = Some(now);
-                        true
-                    }
-                    Some(last_time) => {
-                        if now.duration_since(last_time) >= self.frame_interval {
-                            self.last_frame_time = Some(now);
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                }
+                // FPS mode: only send every 30th frame (1fps from 30fps source)
+                (self.frames_seen - 1) % self.frame_skip_count == 0
             }
         }
     }

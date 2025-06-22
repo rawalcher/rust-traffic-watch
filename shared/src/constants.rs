@@ -10,7 +10,7 @@ pub const DEFAULT_MODEL: &str = "yolov5n";
 pub const DEFAULT_DURATION_SECONDS: u64 = 120;
 pub const DEFAULT_FPS: f32 = 10.0;
 
-pub const MAX_FRAME_SEQUENCE: u64 = 900;
+pub const MAX_FRAME_SEQUENCE: u64 = 30000;
 pub const FRAME_WIDTH: u32 = 1920;
 pub const FRAME_HEIGHT: u32 = 1080;
 
