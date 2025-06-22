@@ -93,7 +93,6 @@ async fn handle_connection(
                     config.experiment_id, config.model_name, addr
                 );
 
-                // Phase 1: Initialize detector
                 let new_detector = match PersistentPythonDetector::new(config.model_name.clone(), INFERENCE_TENSORRT_PATH.to_string()) {
                     Ok(detector) => {
                         info!("Detector initialized and preheated");
@@ -115,7 +114,6 @@ async fn handle_connection(
                     *config_guard = Some(config);
                 }
 
-                // Phase 2: Signal preheating complete
                 if let Err(e) = send_preheating_complete().await {
                     error!("Failed to send preheating complete: {}", e);
                     return Err(format!("Failed to send preheating complete: {}", e));
@@ -138,12 +136,6 @@ async fn handle_connection(
                 break;
             }
             Ok(NetworkMessage::Frame(timing)) => {
-                let experiment_started = state.experiment_started.load(Ordering::Relaxed);
-                debug!(
-                    "Received frame {} from {} (experiment_started: {})",
-                    timing.sequence_id, addr, experiment_started
-                );
-
                 let config_opt = {
                     let config_guard = state.config.lock().await;
                     config_guard.clone()
@@ -152,7 +144,6 @@ async fn handle_connection(
                 if let Some(config) = config_opt {
                     let model_name = config.model_name.clone();
 
-                    // Process the frame
                     match process_frame_and_send_result(timing, &model_name, &state).await {
                         Ok(()) => {
                             let mut frames_guard = state.frames_processed.lock().await;
@@ -164,14 +155,11 @@ async fn handle_connection(
                         }
                     }
                 } else {
-                    error!("Frame received but no experiment config set in shared state");
+                    error!("Frame received but no experiment config set");
                 }
             }
-            Ok(other_msg) => {
-                debug!(
-                    "Received unexpected message type from {}: {:?}",
-                    addr, other_msg
-                );
+            Ok(_) => {
+                debug!("Received unexpected message type from {}", addr);
             }
             Err(e) => {
                 info!("Connection from {} ended: {}", addr, e);
@@ -180,15 +168,6 @@ async fn handle_connection(
         }
     }
 
-    let frames_processed = {
-        let frames_guard = state.frames_processed.lock().await;
-        *frames_guard
-    };
-
-    debug!(
-        "Connection handler for {} finished. Total frames processed: {}",
-        addr, frames_processed
-    );
     Ok(())
 }
 
@@ -210,8 +189,6 @@ async fn process_frame_and_send_result(
     timing.jetson_received = Some(current_timestamp_micros());
     timing.jetson_inference_start = Some(current_timestamp_micros());
 
-    debug!("Starting inference for frame {}", timing.sequence_id);
-
     let inference_result = {
         let mut detector_guard = state.detector.lock().await;
         if let Some(ref mut detector) = *detector_guard {
@@ -224,25 +201,12 @@ async fn process_frame_and_send_result(
     timing.jetson_inference_complete = Some(current_timestamp_micros());
     timing.jetson_sent_result = Some(current_timestamp_micros());
 
-    debug!(
-        "Sending result for frame {} to controller",
-        timing.sequence_id
-    );
-
     send_result_to_controller(&timing, inference_result)
         .await
         .map_err(|e| {
-            error!(
-                "Failed to send result to controller for frame {}: {}",
-                timing.sequence_id, e
-            );
+            error!("Failed to send result to controller for frame {}: {}", timing.sequence_id, e);
             e.to_string()
         })?;
-
-    debug!(
-        "Successfully processed and sent result for frame {}",
-        timing.sequence_id
-    );
 
     Ok(())
 }
@@ -252,11 +216,6 @@ async fn perform_inference(
     model_name: &str,
     detector: &mut PersistentPythonDetector,
 ) -> Result<InferenceResult, String> {
-    debug!(
-        "Performing inference for frame {} with model {}",
-        timing.sequence_id, model_name
-    );
-
     let (inference_result, counts) =
         perform_python_inference_with_counts(timing, detector, model_name, "offload").await?;
 

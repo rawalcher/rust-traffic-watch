@@ -1,6 +1,17 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use std::sync::Arc;
 use crate::types::*;
+use log::{debug, warn};
+
+static CONTROLLER_CONNECTION: tokio::sync::OnceCell<Arc<Mutex<Option<TcpStream>>>> = tokio::sync::OnceCell::const_new();
+
+async fn get_controller_connection() -> &'static Arc<Mutex<Option<TcpStream>>> {
+    CONTROLLER_CONNECTION.get_or_init(|| async {
+        Arc::new(Mutex::new(None))
+    }).await
+}
 
 pub async fn send_message<T: serde::Serialize>(
     stream: &mut TcpStream,
@@ -32,16 +43,38 @@ pub async fn send_result_to_controller(
     timing: &TimingPayload,
     inference: InferenceResult,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let controller_addr = format!("{}:{}", crate::constants::CONTROLLER_ADDRESS, crate::constants::CONTROLLER_PORT);
-    let mut controller_stream = TcpStream::connect(&controller_addr).await?;
-
     let result = ProcessingResult {
         timing: timing.clone(),
         inference,
     };
 
     let message = ControlMessage::ProcessingResult(result);
-    send_message(&mut controller_stream, &message).await?;
+
+    let connection = get_controller_connection().await;
+    let mut stream_guard = connection.lock().await;
+
+    if stream_guard.is_none() {
+        let controller_addr = format!("{}:{}", crate::constants::CONTROLLER_ADDRESS, crate::constants::CONTROLLER_PORT);
+        let new_stream = TcpStream::connect(&controller_addr).await?;
+        *stream_guard = Some(new_stream);
+        debug!("Created controller connection");
+    }
+
+    if let Some(ref mut stream) = *stream_guard {
+        match send_message(stream, &message).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                warn!("Controller connection failed, reconnecting: {}", e);
+                *stream_guard = None;
+            }
+        }
+    }
+
+    let controller_addr = format!("{}:{}", crate::constants::CONTROLLER_ADDRESS, crate::constants::CONTROLLER_PORT);
+    let mut new_stream = TcpStream::connect(&controller_addr).await?;
+    send_message(&mut new_stream, &message).await?;
+    *stream_guard = Some(new_stream);
+    debug!("Reconnected to controller");
 
     Ok(())
 }
