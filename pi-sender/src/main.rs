@@ -166,13 +166,13 @@ async fn local_processing(
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let mut throughput_controller = FrameThroughputController::new(throughput_mode);
 
-    let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
     let mut frames_processed = 0u64;
     let mut frames_dropped = 0u64;
+    let mut experiment_start: Option<Instant> = None;
 
-    while experiment_start.elapsed().as_secs() < config.duration_seconds {
+    loop {
         let mut timing = TimingPayload::new(sequence_id);
 
         let frame_data = match load_frame_from_image(sequence_id) {
@@ -190,8 +190,13 @@ async fn local_processing(
 
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        // Check if we should process this frame
         if throughput_controller.should_send_frame() {
+            // Start timer on first frame process
+            if experiment_start.is_none() {
+                experiment_start = Some(Instant::now());
+                info!("Starting experiment timer on first frame process");
+            }
+
             let (inference_result, counts) = match process_locally_with_python(&timing, &mut detector, &config.model_name).await {
                 Ok(result) => result,
                 Err(e) => {
@@ -222,6 +227,12 @@ async fn local_processing(
             debug!("Dropped frame {} (FPS mode)", sequence_id);
         }
 
+        if let Some(start_time) = experiment_start {
+            if start_time.elapsed().as_secs() >= config.duration_seconds {
+                break;
+            }
+        }
+
         sequence_id += 1;
         if sequence_id > MAX_FRAME_SEQUENCE {
             sequence_id = 1;
@@ -244,13 +255,13 @@ async fn offloading(
 
     let mut throughput_controller = FrameThroughputController::new(throughput_mode);
 
-    let experiment_start = Instant::now();
     let frame_interval = Duration::from_secs_f32(1.0 / config.fixed_fps);
     let mut sequence_id = 1u64;
     let mut frames_sent = 0u64;
     let mut frames_dropped = 0u64;
+    let mut experiment_start: Option<Instant> = None;
 
-    while experiment_start.elapsed().as_secs() < config.duration_seconds {
+    loop {
         let mut timing = TimingPayload::new(sequence_id);
 
         let frame_data = match load_frame_from_image(sequence_id) {
@@ -268,8 +279,13 @@ async fn offloading(
 
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        // Check if we should send this frame
         if throughput_controller.should_send_frame() {
+            // Start timer on first frame send
+            if experiment_start.is_none() {
+                experiment_start = Some(Instant::now());
+                info!("Starting experiment timer on first frame send");
+            }
+
             timing.pi_sent_to_jetson = Some(current_timestamp_micros());
             let frame_message = NetworkMessage::Frame(timing);
 
@@ -295,6 +311,12 @@ async fn offloading(
         } else {
             frames_dropped += 1;
             debug!("Dropped frame {} (FPS mode)", sequence_id);
+        }
+
+        if let Some(start_time) = experiment_start {
+            if start_time.elapsed().as_secs() >= config.duration_seconds {
+                break;
+            }
         }
 
         sequence_id += 1;
