@@ -8,7 +8,7 @@ pub const PI_ADDRESS: &str = "10.0.0.22";
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
 pub const DEFAULT_DURATION_SECONDS: u64 = 120;
-pub const DEFAULT_FPS: f32 = 10.0;
+pub const DEFAULT_FPS: f32 = 1.0;
 
 pub const MAX_FRAME_SEQUENCE: u64 = 30000;
 pub const FRAME_WIDTH: u32 = 1920;
