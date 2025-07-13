@@ -1,9 +1,9 @@
 use log::{debug, error, info};
-use shared::constants::{jetson_bind_address, CONTROLLER_ADDRESS, CONTROLLER_PORT, INFERENCE_TENSORRT_PATH, JETSON_PORT};
+use shared::constants::{controller_address, jetson_address, CONTROLLER_ADDRESS, CONTROLLER_PORT, INFERENCE_TENSORRT_PATH, JETSON_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
-    send_result_to_controller, ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
-    PersistentPythonDetector, TimingPayload,
+    ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
+    PersistentPythonDetector, TimingPayload, ProcessingResult,
 };
 use std::error;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +17,7 @@ struct SharedState {
     detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
     experiment_started: Arc<AtomicBool>,
     frames_processed: Arc<Mutex<u64>>,
+    controller_result_stream: Arc<Mutex<Option<TcpStream>>>,
 }
 
 impl SharedState {
@@ -26,7 +27,34 @@ impl SharedState {
             detector: Arc::new(Mutex::new(None)),
             experiment_started: Arc::new(AtomicBool::new(false)),
             frames_processed: Arc::new(Mutex::new(0)),
+            controller_result_stream: Arc::new(Mutex::new(None)),
         }
+    }
+
+    async fn connect_to_controller(&self) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        let stream = TcpStream::connect(&controller_address()).await?;
+
+        let mut result_stream_guard = self.controller_result_stream.lock().await;
+        *result_stream_guard = Some(stream);
+
+        info!("Connected persistent result stream to controller");
+        Ok(())
+    }
+
+    async fn send_result_to_controller(&self, timing: &TimingPayload, inference: InferenceResult) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        let result = ProcessingResult {
+            timing: timing.clone(),
+            inference,
+        };
+        let message = ControlMessage::ProcessingResult(result);
+
+        let mut stream_guard = self.controller_result_stream.lock().await;
+        if let Some(ref mut stream) = *stream_guard {
+            send_message(stream, &message).await?;
+        } else {
+            return Err("No controller result connection available".into());
+        }
+        Ok(())
     }
 }
 
@@ -34,14 +62,15 @@ impl SharedState {
 async fn main() -> Result<(), Box<dyn error::Error>> {
     if std::env::var("RUST_LOG").is_err() {
         unsafe {
+            // same as in pi_sender will change later
             std::env::set_var("RUST_LOG", "info");
         }
     }
     env_logger::init();
 
-    info!("Jetson Coordinator starting...");
+    info!("Jetson Receiver starting...");
 
-    let controller_listener = match TcpListener::bind(&jetson_bind_address()).await {
+    let controller_listener = match TcpListener::bind(&jetson_address()).await {
         Ok(listener) => {
             info!("Listening on Port {}", JETSON_PORT);
             listener
@@ -69,7 +98,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         });
     }
 
-    info!("Jetson Coordinator stopped");
+    info!("Jetson Receiver stopped");
     Ok(())
 }
 
@@ -93,7 +122,10 @@ async fn handle_connection(
                     config.experiment_id, config.model_name, addr
                 );
 
-                let new_detector = match PersistentPythonDetector::new(config.model_name.clone(), INFERENCE_TENSORRT_PATH.to_string()) {
+                let new_detector = match PersistentPythonDetector::new(
+                    config.model_name.clone(),
+                    INFERENCE_TENSORRT_PATH.to_string()
+                ) {
                     Ok(detector) => {
                         info!("Detector initialized and preheated");
                         detector
@@ -112,6 +144,11 @@ async fn handle_connection(
                 {
                     let mut config_guard = state.config.lock().await;
                     *config_guard = Some(config);
+                }
+
+                if let Err(e) = state.connect_to_controller().await {
+                    error!("Failed to connect to controller for results: {}", e);
+                    return Err(format!("Failed to connect to controller: {}", e));
                 }
 
                 if let Err(e) = send_preheating_complete().await {
@@ -136,6 +173,11 @@ async fn handle_connection(
                 break;
             }
             Ok(NetworkMessage::Frame(timing)) => {
+                if !state.experiment_started.load(Ordering::Relaxed) {
+                    debug!("Frame received but experiment not started yet, ignoring");
+                    continue;
+                }
+
                 let config_opt = {
                     let config_guard = state.config.lock().await;
                     config_guard.clone()
@@ -172,8 +214,7 @@ async fn handle_connection(
 }
 
 async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    let controller_addr = format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_PORT);
-    let mut controller_stream = TcpStream::connect(&controller_addr).await?;
+    let mut controller_stream = TcpStream::connect(&controller_address()).await?;
     let message = ControlMessage::PreheatingComplete;
     send_message(&mut controller_stream, &message).await?;
 
@@ -201,8 +242,7 @@ async fn process_frame_and_send_result(
     timing.jetson_inference_complete = Some(current_timestamp_micros());
     timing.jetson_sent_result = Some(current_timestamp_micros());
 
-    send_result_to_controller(&timing, inference_result)
-        .await
+    state.send_result_to_controller(&timing, inference_result).await
         .map_err(|e| {
             error!("Failed to send result to controller for frame {}: {}", timing.sequence_id, e);
             e.to_string()

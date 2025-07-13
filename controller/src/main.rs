@@ -1,8 +1,6 @@
 use csv::Writer;
 use log::{debug, error, info, warn};
-use shared::constants::{
-    controller_bind_address, jetson_full_address, pi_full_address, CONTROLLER_PORT, DEFAULT_MODEL,
-};
+use shared::constants::{controller_address, jetson_address, pi_address, CONTROLLER_PORT, DEFAULT_MODEL};
 use shared::{
     current_timestamp_micros, receive_message, send_message, ControlMessage, ExperimentConfig,
     ExperimentMode, NetworkMessage, ProcessingResult,
@@ -12,10 +10,128 @@ use std::error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout, Duration, Instant};
 
+struct PersistentConnections {
+    pi_stream: Option<TcpStream>,
+    jetson_stream: Option<TcpStream>,
+    result_listener: TcpListener,
+}
+
+impl PersistentConnections {
+    async fn new() -> Result<Self, Box<dyn error::Error + Send + Sync>> {
+        let result_listener = TcpListener::bind(controller_address()).await?;
+        debug!("Result listener bound to port {}", CONTROLLER_PORT);
+
+        Ok(Self {
+            pi_stream: None,
+            jetson_stream: None,
+            result_listener,
+        })
+    }
+
+    async fn connect_to_devices(&mut self, config: &ExperimentConfig) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        info!("Connecting to Pi...");
+        let pi_stream = TcpStream::connect(pi_address()).await?;
+        info!("Connected to Pi");
+
+        let jetson_stream = if matches!(config.mode, ExperimentMode::Offload) {
+            info!("Connecting to Jetson...");
+            let stream = TcpStream::connect(jetson_address()).await?;
+            info!("Connected to Jetson");
+            Some(stream)
+        } else {
+            None
+        };
+
+        self.pi_stream = Some(pi_stream);
+        self.jetson_stream = jetson_stream;
+        Ok(())
+    }
+
+    async fn send_config_for_preheating(&mut self, config: &ExperimentConfig) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        let control_message = NetworkMessage::Control(ControlMessage::StartExperiment {
+            config: config.clone(),
+        });
+
+        if let Some(ref mut pi_stream) = self.pi_stream {
+            send_message(pi_stream, &control_message).await?;
+            info!("Sent preheating config to Pi");
+        }
+
+        if let Some(ref mut jetson_stream) = self.jetson_stream {
+            send_message(jetson_stream, &control_message).await?;
+            info!("Sent preheating config to Jetson");
+        }
+
+        Ok(())
+    }
+
+    async fn wait_for_preheating(&mut self, expected_devices: usize) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        let mut devices_ready = 0;
+
+        info!("Waiting for {} device(s) to complete preheating...", expected_devices);
+
+        while devices_ready < expected_devices {
+            let (mut stream, addr) = self.result_listener.accept().await?;
+            debug!("Received preheating connection from {}", addr);
+
+            match timeout(Duration::from_secs(60), receive_message::<ControlMessage>(&mut stream)).await {
+                Ok(Ok(ControlMessage::PreheatingComplete)) => {
+                    devices_ready += 1;
+                    info!("Device {} preheating complete ({}/{})", addr, devices_ready, expected_devices);
+                }
+                Ok(Ok(msg)) => {
+                    warn!("Unexpected message during preheating: {:?}", msg);
+                }
+                Ok(Err(e)) => {
+                    error!("Error receiving preheating confirmation: {}", e);
+                }
+                Err(_) => {
+                    error!("Timeout waiting for preheating confirmation from {}", addr);
+                    return Err("Preheating timeout".into());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn begin_experiment(&mut self) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        let begin_message = NetworkMessage::Control(ControlMessage::BeginExperiment);
+
+        if let Some(ref mut pi_stream) = self.pi_stream {
+            send_message(pi_stream, &begin_message).await?;
+        }
+
+        if let Some(ref mut jetson_stream) = self.jetson_stream {
+            send_message(jetson_stream, &begin_message).await?;
+        }
+
+        info!("Sent begin experiment signal to all devices");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        let shutdown_message = NetworkMessage::Control(ControlMessage::Shutdown);
+
+        if let Some(ref mut pi_stream) = self.pi_stream {
+            let _ = send_message(pi_stream, &shutdown_message).await;
+            info!("Sent shutdown to Pi");
+        }
+
+        if let Some(ref mut jetson_stream) = self.jetson_stream {
+            let _ = send_message(jetson_stream, &shutdown_message).await;
+            info!("Sent shutdown to Jetson");
+        }
+
+        Ok(())
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     if env::var("RUST_LOG").is_err() {
         unsafe {
+            // main() is not multithreaded so why is rust complaining??
             env::set_var("RUST_LOG", "info");
         }
     }
@@ -46,7 +162,6 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
         info!("Starting experiment: {}", experiment_id);
 
         let config = ExperimentConfig::new(experiment_id.clone(), mode.clone(), model_name.clone());
-
         let results = run_experiment(config).await?;
         generate_analysis_csv(&results, &experiment_id)?;
 
@@ -66,85 +181,40 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 async fn run_experiment(
     config: ExperimentConfig,
 ) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
-    info!(
-        "Starting preheating phase for experiment: {}",
-        config.experiment_id
-    );
+    info!("Starting experiment: {}", config.experiment_id);
 
-    let listener = TcpListener::bind(controller_bind_address()).await?;
-    debug!("Listening on port {}", CONTROLLER_PORT);
+    let mut connections = PersistentConnections::new().await?;
 
-    // Phase 1: Connect and send config for preheating
-    let mut pi_stream = TcpStream::connect(pi_full_address()).await?;
-    info!("Connected to Pi");
+    connections.connect_to_devices(&config).await?;
+    connections.send_config_for_preheating(&config).await?;
 
-    let mut jetson_stream_opt = None;
-    if matches!(config.mode, ExperimentMode::Offload) {
-        let mut jetson_stream = TcpStream::connect(jetson_full_address()).await?;
-        let control_message = NetworkMessage::Control(ControlMessage::StartExperiment {
-            config: config.clone(),
-        });
-        send_message(&mut jetson_stream, &control_message).await?;
-        info!("Connected to Jetson and sent config for preheating");
-        jetson_stream_opt = Some(jetson_stream);
-    }
-
-    let control_message = NetworkMessage::Control(ControlMessage::StartExperiment {
-        config: config.clone(),
-    });
-    send_message(&mut pi_stream, &control_message).await?;
-    info!("Sent experiment config to Pi for preheating");
-
-    // Phase 2: Wait for preheating completion
-    let mut devices_ready = 0;
     let expected_devices = if matches!(config.mode, ExperimentMode::Offload) { 2 } else { 1 };
-
-    info!("Waiting for {} device(s) to complete preheating...", expected_devices);
-
-    while devices_ready < expected_devices {
-        let (mut stream, addr) = listener.accept().await?;
-        debug!("Received connection from {}", addr);
-
-        match timeout(Duration::from_secs(60), receive_message::<ControlMessage>(&mut stream)).await {
-            Ok(Ok(ControlMessage::PreheatingComplete)) => {
-                devices_ready += 1;
-                info!("Device {} preheating complete ({}/{})", addr, devices_ready, expected_devices);
-            }
-            Ok(Ok(msg)) => {
-                warn!("Unexpected message during preheating: {:?}", msg);
-            }
-            Ok(Err(e)) => {
-                error!("Error receiving preheating confirmation: {}", e);
-            }
-            Err(_) => {
-                error!("Timeout waiting for preheating confirmation from {}", addr);
-                return Err("Preheating timeout".into());
-            }
-        }
-    }
+    connections.wait_for_preheating(expected_devices).await?;
 
     info!("All devices ready! Starting experiment in 2 seconds...");
     sleep(Duration::from_secs(2)).await;
 
-    // Phase 3: Signal devices to begin actual experiment
-    let begin_message = NetworkMessage::Control(ControlMessage::BeginExperiment);
-    send_message(&mut pi_stream, &begin_message).await?;
+    connections.begin_experiment().await?;
+    let results = collect_results(&mut connections.result_listener, &config).await?;
+    connections.shutdown().await?;
 
-    if let Some(ref mut jetson_stream) = jetson_stream_opt {
-        send_message(jetson_stream, &begin_message).await?;
-    }
+    Ok(results)
+}
 
-    info!("Experiment started - collecting results...");
-
-    // Phase 4: Collect experiment results
+async fn collect_results(
+    listener: &mut TcpListener,
+    config: &ExperimentConfig,
+) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
     let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let experiment_start = Instant::now();
+
+    info!("Collecting results for {} seconds...", config.duration_seconds);
 
     while experiment_start.elapsed().as_secs() < config.duration_seconds {
         tokio::select! {
             accept_result = listener.accept() => {
                 if let Ok((stream, addr)) = accept_result {
-                    debug!("New connection from {}", addr);
+                    debug!("New result connection from {}", addr);
 
                     let results_clone = std::sync::Arc::clone(&results);
                     tokio::spawn(async move {
@@ -157,16 +227,6 @@ async fn run_experiment(
             }
         }
     }
-
-    // Phase 5: Shutdown
-    let shutdown_message = NetworkMessage::Control(ControlMessage::Shutdown);
-    let _ = send_message(&mut pi_stream, &shutdown_message).await;
-
-    if let Some(ref mut jetson_stream) = jetson_stream_opt {
-        let _ = send_message(jetson_stream, &shutdown_message).await;
-    }
-
-    info!("Sent shutdown signals to all devices");
 
     let final_results = {
         let results_guard = results.lock().unwrap();
@@ -182,7 +242,7 @@ async fn handle_result_connection(
     addr: std::net::SocketAddr,
     results: std::sync::Arc<std::sync::Mutex<Vec<ProcessingResult>>>,
 ) {
-    info!("Handling persistent result connection from {}", addr);
+    info!("Handling result connection from {}", addr);
     let mut frame_count = 0;
 
     loop {
@@ -259,7 +319,7 @@ fn generate_analysis_csv(
 
         writer.write_record(&[
             &timing.sequence_id.to_string(),
-            &timing.pi_hostname, // NEW: Include Pi hostname
+            &timing.pi_hostname,
             &timing
                 .pi_capture_start
                 .map(|t| t.to_string())
