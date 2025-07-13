@@ -2,8 +2,8 @@ use log::{debug, error, info};
 use shared::constants::{INFERENCE_TENSORRT_PATH, JETSON_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
-    ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
-    PersistentPythonDetector, TimingPayload, ProcessingResult,
+    ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage, PersistentPythonDetector,
+    ProcessingResult, TimingPayload,
 };
 use std::error;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,7 +36,9 @@ impl SharedState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
     if std::env::var("RUST_LOG").is_err() {
-        unsafe { std::env::set_var("RUST_LOG", "info"); }
+        unsafe {
+            std::env::set_var("RUST_LOG", "info");
+        }
     }
     env_logger::init();
 
@@ -45,34 +47,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let should_shutdown = Arc::new(AtomicBool::new(false));
     let shared_state = SharedState::new();
 
-    // do we need all this data on controller connection??
-    let controller_shutdown = Arc::clone(&should_shutdown);
-    let controller_state = shared_state.clone();
-
-    let pi_shutdown = Arc::clone(&should_shutdown);
-    let pi_state = shared_state.clone();
-
-    tokio::select! {
-        result = handle_controller_connections(controller_shutdown, controller_state) => {
-            if let Err(e) = result {
-                error!("Controller connection handler failed: {}", e);
-            }
-        }
-        result = handle_pi_connections(pi_shutdown, pi_state) => {
-            if let Err(e) = result {
-                error!("Pi connection handler failed: {}", e);
-            }
-        }
-    }
-
-    info!("Jetson Receiver stopped");
-    Ok(())
-}
-
-async fn handle_controller_connections(
-    should_shutdown: Arc<AtomicBool>,
-    state: SharedState,
-) -> Result<(), Box<dyn error::Error>> {
     while !should_shutdown.load(Ordering::Relaxed) {
         info!("Connecting to controller...");
         let stream = match TcpStream::connect(shared::constants::controller_address()).await {
@@ -86,121 +60,139 @@ async fn handle_controller_connections(
                 continue;
             }
         };
-        let mut controller_guard = state.controller_stream.lock().await;
+        let mut controller_guard = shared_state.controller_stream.lock().await;
         *controller_guard = Some(stream);
-        
-        let shutdown_flag = Arc::clone(&should_shutdown);
-        let local_state = state.clone();
 
-        if let Err(e) = handle_controller_connection(shutdown_flag, local_state).await {
-            error!("Controller connection error: {}", e);
-            let mut controller_guard = state.controller_stream.lock().await;
+        let shutdown_flag = Arc::clone(&should_shutdown);
+        let state = shared_state.clone();
+
+        if let Err(e) = handle_connection(shutdown_flag, state).await {
+            error!("Connection error: {}", e);
+            let mut controller_guard = shared_state.controller_stream.lock().await;
             *controller_guard = None;
         }
     }
+
+    info!("Jetson Receiver stopped");
     Ok(())
 }
 
-async fn handle_controller_connection(
+async fn handle_connection(
     should_shutdown: Arc<AtomicBool>,
     state: SharedState,
 ) -> Result<(), String> {
+    let mut pi_listener_started = false;
+
     loop {
         if should_shutdown.load(Ordering::Relaxed) {
             break;
         }
 
-        let mut stream_opt = {
+        let message_result = {
             let mut controller_guard = state.controller_stream.lock().await;
-            controller_guard.take()
+            if let Some(ref mut stream) = *controller_guard {
+                receive_message::<NetworkMessage>(stream).await
+            } else {
+                return Err("No controller stream available".to_string());
+            }
         };
 
-        if let Some(ref mut stream) = stream_opt {
-            let message_result = receive_message::<NetworkMessage>(stream).await;
+        match message_result {
+            Ok(NetworkMessage::Control(ControlMessage::StartExperiment { config })) => {
+                info!(
+                    "Starting preheating for experiment: {} with model {}",
+                    config.experiment_id, config.model_name
+                );
 
-            {
-                let mut controller_guard = state.controller_stream.lock().await;
-                *controller_guard = stream_opt;
-            }
-
-            match message_result {
-                Ok(NetworkMessage::Control(ControlMessage::StartExperiment { config })) => {
-                    info!(
-                        "Starting preheating for experiment: {} with model {}",
-                        config.experiment_id, config.model_name
-                    );
-
-                    let new_detector = match PersistentPythonDetector::new(
-                        config.model_name.clone(),
-                        INFERENCE_TENSORRT_PATH.to_string()
-                    ) {
-                        Ok(detector) => {
-                            info!("Detector initialized and preheated");
-                            detector
-                        }
-                        Err(e) => {
-                            error!("Failed to initialize detector: {}", e);
-                            return Err(format!("Failed to initialize detector: {}", e));
-                        }
-                    };
-
-                    {
-                        let mut detector_guard = state.detector.lock().await;
-                        *detector_guard = Some(new_detector);
+                let new_detector = match PersistentPythonDetector::new(
+                    config.model_name.clone(),
+                    INFERENCE_TENSORRT_PATH.to_string(),
+                ) {
+                    Ok(detector) => {
+                        info!("Detector initialized and preheated");
+                        detector
                     }
-
-                    {
-                        let mut config_guard = state.config.lock().await;
-                        *config_guard = Some(config);
+                    Err(e) => {
+                        error!("Failed to initialize detector: {}", e);
+                        return Err(format!("Failed to initialize detector: {}", e));
                     }
+                };
 
+                {
+                    let mut detector_guard = state.detector.lock().await;
+                    *detector_guard = Some(new_detector);
+                }
+
+                {
+                    let mut config_guard = state.config.lock().await;
+                    *config_guard = Some(config);
+                }
+
+                {
                     let mut controller_guard = state.controller_stream.lock().await;
                     if let Some(ref mut stream) = *controller_guard {
-                        if let Err(e) = send_message(stream, &ControlMessage::PreheatingComplete).await {
+                        if let Err(e) =
+                            send_message(stream, &ControlMessage::PreheatingComplete).await
+                        {
                             error!("Failed to send preheating complete: {}", e);
                             return Err(format!("Failed to send preheating complete: {}", e));
                         }
                         info!("Sent preheating complete to controller");
                     }
                 }
-                Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
-                    info!("Received experiment start signal!");
-                    state.experiment_started.store(true, Ordering::Relaxed);
-                }
-                Ok(NetworkMessage::Control(ControlMessage::Shutdown)) => {
-                    info!("Shutdown requested");
 
-                    let mut detector_guard = state.detector.lock().await;
-                    if let Some(mut det) = detector_guard.take() {
-                        let _ = det.shutdown();
-                        debug!("Detector shut down");
-                    }
+                if !pi_listener_started {
+                    let pi_state = state.clone();
+                    let pi_shutdown = Arc::clone(&should_shutdown);
 
-                    should_shutdown.store(true, Ordering::Relaxed);
-                    break;
-                }
-                Ok(_) => {
-                    debug!("Received unexpected message type from controller");
-                }
-                Err(e) => {
-                    info!("Controller connection ended: {}", e);
-                    break;
+                    tokio::spawn(async move {
+                        if let Err(e) = start_pi_listener(pi_shutdown, pi_state).await {
+                            error!("Pi listener failed: {}", e);
+                        }
+                    });
+
+                    pi_listener_started = true;
+                    info!("Pi listener started");
                 }
             }
-        } else {
-            sleep(Duration::from_millis(100)).await;
+            Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
+                info!("Received experiment start signal!");
+                state.experiment_started.store(true, Ordering::Relaxed);
+            }
+            Ok(NetworkMessage::Control(ControlMessage::Shutdown)) => {
+                info!("Shutdown requested");
+
+                let mut detector_guard = state.detector.lock().await;
+                if let Some(mut det) = detector_guard.take() {
+                    let _ = det.shutdown();
+                    debug!("Detector shut down");
+                }
+
+                should_shutdown.store(true, Ordering::Relaxed);
+                break;
+            }
+            Ok(_) => {
+                debug!("Received unexpected message type");
+            }
+            Err(e) => {
+                info!("Connection ended: {}", e);
+                break;
+            }
         }
     }
 
     Ok(())
 }
 
-async fn handle_pi_connections(
+async fn start_pi_listener(
     should_shutdown: Arc<AtomicBool>,
     state: SharedState,
 ) -> Result<(), Box<dyn error::Error>> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", JETSON_PORT)).await?;
-    info!("Jetson listening for Pi connections on port {}", JETSON_PORT);
+    info!(
+        "Jetson listening for Pi connections on port {}",
+        JETSON_PORT
+    );
 
     while !should_shutdown.load(Ordering::Relaxed) {
         tokio::select! {
@@ -208,10 +200,10 @@ async fn handle_pi_connections(
                 match accept_result {
                     Ok((stream, addr)) => {
                         info!("Pi connected from: {}", addr);
-                        
+
                         let shutdown_flag = Arc::clone(&should_shutdown);
                         let local_state = state.clone();
-                        
+
                         tokio::spawn(async move {
                             if let Err(e) = handle_pi_connection(stream, shutdown_flag, local_state).await {
                                 error!("Pi connection error: {}", e);
@@ -307,12 +299,15 @@ async fn process_frame_and_send_result(
         inference: inference_result,
     };
     let result_message = ControlMessage::ProcessingResult(result);
-
     let mut controller_guard = state.controller_stream.lock().await;
     if let Some(ref mut controller_stream) = *controller_guard {
-        send_message(controller_stream, &result_message).await
+        send_message(controller_stream, &result_message)
+            .await
             .map_err(|e| {
-                error!("Failed to send result to controller for frame {}: {}", timing.sequence_id, e);
+                error!(
+                    "Failed to send result to controller for frame {}: {}",
+                    timing.sequence_id, e
+                );
                 e.to_string()
             })?;
     } else {

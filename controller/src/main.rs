@@ -16,28 +16,38 @@ struct Connections {
 }
 
 impl Connections {
-    async fn wait_for_clients(config: &ExperimentConfig) -> Result<Self, Box<dyn error::Error + Send + Sync>> {
+    async fn wait_for_clients(
+        config: &ExperimentConfig,
+    ) -> Result<Self, Box<dyn error::Error + Send + Sync>> {
         let listener = TcpListener::bind(controller_address()).await?;
         info!("Controller listening on {}", controller_address());
 
         let mut pi_stream: Option<TcpStream> = None;
         let mut jetson_stream: Option<TcpStream> = None;
 
-        let expected_connections = if matches!(config.mode, ExperimentMode::Offload) { 2 } else { 1 };
+        let expected_connections = if matches!(config.mode, ExperimentMode::Offload) {
+            2
+        } else {
+            1
+        };
         let mut connections_received = 0;
 
-        info!("Waiting for {} client(s) to connect...", expected_connections);
+        info!(
+            "Waiting for {} client(s) to connect...",
+            expected_connections
+        );
 
         while connections_received < expected_connections {
             let (stream, addr) = listener.accept().await?;
             info!("Client connected from: {}", addr);
 
             let addr_str = addr.ip().to_string();
-            if addr_str.eq(PI_ADDRESS){
+            if addr_str.eq(PI_ADDRESS) {
                 pi_stream = Some(stream);
                 info!("Pi connected");
                 connections_received += 1;
-            } else if addr_str.eq(JETSON_ADDRESS) && matches!(config.mode, ExperimentMode::Offload) {
+            } else if addr_str.eq(JETSON_ADDRESS) && matches!(config.mode, ExperimentMode::Offload)
+            {
                 jetson_stream = Some(stream);
                 info!("Jetson connected");
                 connections_received += 1;
@@ -56,7 +66,10 @@ impl Connections {
         })
     }
 
-    async fn send_start_experiment(&mut self, config: &ExperimentConfig) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    async fn send_start_experiment(
+        &mut self,
+        config: &ExperimentConfig,
+    ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let message = NetworkMessage::Control(ControlMessage::StartExperiment {
             config: config.clone(),
         });
@@ -72,15 +85,24 @@ impl Connections {
         Ok(())
     }
 
-    async fn wait_for_preheating(&mut self, expected_devices: usize) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-        info!("Waiting for {} device(s) to complete preheating...", expected_devices);
+    async fn wait_for_preheating(
+        &mut self,
+        expected_devices: usize,
+    ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        info!(
+            "Waiting for {} device(s) to complete preheating...",
+            expected_devices
+        );
         let mut devices_ready = 0;
 
         let pi_response = receive_message::<ControlMessage>(&mut self.pi_stream).await?;
         match pi_response {
             ControlMessage::PreheatingComplete => {
                 devices_ready += 1;
-                info!("Pi preheating complete ({}/{})", devices_ready, expected_devices);
+                info!(
+                    "Pi preheating complete ({}/{})",
+                    devices_ready, expected_devices
+                );
             }
             msg => {
                 return Err(format!("Unexpected message from Pi: {:?}", msg).into());
@@ -92,7 +114,10 @@ impl Connections {
             match jetson_response {
                 ControlMessage::PreheatingComplete => {
                     devices_ready += 1;
-                    info!("Jetson preheating complete ({}/{})", devices_ready, expected_devices);
+                    info!(
+                        "Jetson preheating complete ({}/{})",
+                        devices_ready, expected_devices
+                    );
                 }
                 msg => {
                     return Err(format!("Unexpected message from Jetson: {:?}", msg).into());
@@ -118,11 +143,17 @@ impl Connections {
         Ok(())
     }
 
-    async fn collect_results(&mut self, config: &ExperimentConfig) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
+    async fn collect_results(
+        &mut self,
+        config: &ExperimentConfig,
+    ) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
         let mut results = Vec::new();
         let experiment_start = Instant::now();
 
-        info!("Collecting results for {} seconds...", config.duration_seconds);
+        info!(
+            "Collecting results for {} seconds...",
+            config.duration_seconds
+        );
 
         while experiment_start.elapsed().as_secs() < config.duration_seconds {
             tokio::select! {
@@ -148,7 +179,10 @@ impl Connections {
         Ok(results)
     }
 
-    async fn receive_result_from_active_device(&mut self, config: &ExperimentConfig) -> Result<ProcessingResult, Box<dyn error::Error + Send + Sync>> {
+    async fn receive_result_from_active_device(
+        &mut self,
+        config: &ExperimentConfig,
+    ) -> Result<ProcessingResult, Box<dyn error::Error + Send + Sync>> {
         match config.mode {
             ExperimentMode::LocalOnly => {
                 let message = receive_message::<ControlMessage>(&mut self.pi_stream).await?;
@@ -241,10 +275,14 @@ async fn run_experiment(
     config: ExperimentConfig,
 ) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
     info!("Starting experiment: {}", config.experiment_id);
-    
+
     let mut connections = Connections::wait_for_clients(&config).await?;
     connections.send_start_experiment(&config).await?;
-    let expected_devices = if matches!(config.mode, ExperimentMode::Offload) { 2 } else { 1 };
+    let expected_devices = if matches!(config.mode, ExperimentMode::Offload) {
+        2
+    } else {
+        1
+    };
     connections.wait_for_preheating(expected_devices).await?;
 
     info!("All devices ready! Starting experiment in 2 seconds...");

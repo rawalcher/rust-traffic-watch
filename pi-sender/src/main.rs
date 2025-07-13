@@ -1,16 +1,17 @@
-use std::error;
-use shared::{
-    current_timestamp_micros, receive_message, send_message,
-    ControlMessage, ExperimentConfig, ExperimentMode, InferenceResult, NetworkMessage,
-    TimingPayload, PersistentPythonDetector, perform_python_inference_with_counts,
-    ThroughputMode, FrameThroughputController, ProcessingResult,
+use log::{debug, error, info, warn};
+use shared::constants::{
+    jetson_address, FRAME_HEIGHT, FRAME_WIDTH, INFERENCE_PYTORCH_PATH, MAX_FRAME_SEQUENCE,
 };
+use shared::{
+    current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
+    ControlMessage, ExperimentConfig, ExperimentMode, FrameThroughputController, InferenceResult,
+    NetworkMessage, PersistentPythonDetector, ProcessingResult, ThroughputMode, TimingPayload,
+};
+use std::error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::net::{TcpStream};
+use tokio::net::TcpStream;
 use tokio::time::{sleep, Duration, Instant};
-use log::{info, debug, error, warn};
-use shared::constants::{jetson_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, INFERENCE_PYTORCH_PATH};
 
 struct Connections {
     controller_stream: TcpStream,
@@ -32,11 +33,17 @@ impl Connections {
         Ok(())
     }
 
-    async fn send_to_controller(&mut self, message: &ControlMessage) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    async fn send_to_controller(
+        &mut self,
+        message: &ControlMessage,
+    ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
         send_message(&mut self.controller_stream, message).await
     }
 
-    async fn send_to_jetson(&mut self, message: &NetworkMessage) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+    async fn send_to_jetson(
+        &mut self,
+        message: &NetworkMessage,
+    ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
         if let Some(ref mut stream) = self.jetson_stream {
             send_message(stream, message).await
         } else {
@@ -44,7 +51,9 @@ impl Connections {
         }
     }
 
-    async fn wait_for_control_message(&mut self) -> Result<ControlMessage, Box<dyn error::Error + Send + Sync>> {
+    async fn wait_for_control_message(
+        &mut self,
+    ) -> Result<ControlMessage, Box<dyn error::Error + Send + Sync>> {
         let message = receive_message::<NetworkMessage>(&mut self.controller_stream).await?;
         match message {
             NetworkMessage::Control(control_msg) => Ok(control_msg),
@@ -56,7 +65,9 @@ impl Connections {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     if std::env::var("RUST_LOG").is_err() {
-        unsafe { std::env::set_var("RUST_LOG", "info"); }
+        unsafe {
+            std::env::set_var("RUST_LOG", "info");
+        }
     }
     env_logger::init();
 
@@ -66,17 +77,18 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     while !should_shutdown.load(Ordering::Relaxed) {
         info!("Connecting to controller...");
-        let mut controller_stream = match TcpStream::connect(shared::constants::controller_address()).await {
-            Ok(stream) => {
-                info!("Connected to controller");
-                stream
-            }
-            Err(e) => {
-                error!("Failed to connect to controller: {}", e);
-                sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-        };
+        let mut controller_stream =
+            match TcpStream::connect(shared::constants::controller_address()).await {
+                Ok(stream) => {
+                    info!("Connected to controller");
+                    stream
+                }
+                Err(e) => {
+                    error!("Failed to connect to controller: {}", e);
+                    sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
 
         let message = receive_message::<NetworkMessage>(&mut controller_stream).await?;
 
@@ -128,7 +140,7 @@ async fn run_local_experiment(
 
     let detector = match PersistentPythonDetector::new(
         config.model_name.clone(),
-        INFERENCE_PYTORCH_PATH.to_string()
+        INFERENCE_PYTORCH_PATH.to_string(),
     ) {
         Ok(detector) => {
             info!("Detector initialized and preheated");
@@ -140,7 +152,9 @@ async fn run_local_experiment(
         }
     };
 
-    connections.send_to_controller(&ControlMessage::PreheatingComplete).await?;
+    connections
+        .send_to_controller(&ControlMessage::PreheatingComplete)
+        .await?;
     info!("Sent preheating complete to controller");
 
     loop {
@@ -173,9 +187,11 @@ async fn run_offload_experiment(
     info!("OFFLOAD MODE: Starting preheating phase...");
 
     connections.connect_to_jetson().await?;
-    connections.send_to_controller(&ControlMessage::PreheatingComplete).await?;
+    connections
+        .send_to_controller(&ControlMessage::PreheatingComplete)
+        .await?;
     info!("Sent preheating complete to controller");
-    
+
     loop {
         match connections.wait_for_control_message().await? {
             ControlMessage::BeginExperiment => {
@@ -192,7 +208,10 @@ async fn run_offload_experiment(
         }
     }
 
-    info!("Starting OFFLOAD experiment with {:?} mode", throughput_mode);
+    info!(
+        "Starting OFFLOAD experiment with {:?} mode",
+        throughput_mode
+    );
     offloading(config, connections, throughput_mode).await?;
 
     Ok(())
@@ -210,7 +229,10 @@ async fn local_processing(
     let actual_fps = 30.0 / frame_skip as f32;
     let frame_interval = Duration::from_secs_f32(1.0 / actual_fps);
 
-    info!("Local processing: skipping every {} frames for {:.1} FPS", frame_skip, actual_fps);
+    info!(
+        "Local processing: skipping every {} frames for {:.1} FPS",
+        frame_skip, actual_fps
+    );
 
     let mut dataset_frame_id = 1u64;
     let mut logical_sequence_id = 1u64;
@@ -232,15 +254,19 @@ async fn local_processing(
 
         timing.add_frame_data(frame_data, FRAME_WIDTH, FRAME_HEIGHT);
 
-        let (inference_result, counts) = match process_locally(&timing, &mut detector, &config.model_name).await {
-            Ok(result) => result,
-            Err(e) => {
-                error!("Python inference failed for frame {}: {}", dataset_frame_id, e);
-                advance_frame_ids(&mut dataset_frame_id, &mut logical_sequence_id, frame_skip);
-                sleep(frame_interval).await;
-                continue;
-            }
-        };
+        let (inference_result, counts) =
+            match process_locally(&timing, &mut detector, &config.model_name).await {
+                Ok(result) => result,
+                Err(e) => {
+                    error!(
+                        "Python inference failed for frame {}: {}",
+                        dataset_frame_id, e
+                    );
+                    advance_frame_ids(&mut dataset_frame_id, &mut logical_sequence_id, frame_skip);
+                    sleep(frame_interval).await;
+                    continue;
+                }
+            };
 
         let result = ProcessingResult {
             timing: timing.clone(),
@@ -249,7 +275,10 @@ async fn local_processing(
         let result_message = ControlMessage::ProcessingResult(result);
 
         if let Err(e) = connections.send_to_controller(&result_message).await {
-            error!("Failed to send result to controller for frame {}: {}", dataset_frame_id, e);
+            error!(
+                "Failed to send result to controller for frame {}: {}",
+                dataset_frame_id, e
+            );
         }
 
         frames_processed += 1;
@@ -266,8 +295,13 @@ async fn local_processing(
         sleep(frame_interval).await;
     }
 
-    detector.shutdown().map_err(|e| format!("Failed to shutdown detector: {}", e))?;
-    info!("Local processing completed. Processed: {} frames", frames_processed);
+    detector
+        .shutdown()
+        .map_err(|e| format!("Failed to shutdown detector: {}", e))?;
+    info!(
+        "Local processing completed. Processed: {} frames",
+        frames_processed
+    );
     Ok(())
 }
 
@@ -282,7 +316,10 @@ async fn offloading(
     let actual_fps = 30.0 / frame_skip as f32;
     let frame_interval = Duration::from_secs_f32(1.0 / actual_fps);
 
-    info!("Offloading: skipping every {} frames for {:.1} FPS", frame_skip, actual_fps);
+    info!(
+        "Offloading: skipping every {} frames for {:.1} FPS",
+        frame_skip, actual_fps
+    );
 
     let mut dataset_frame_id = 1u64;
     let mut logical_sequence_id = 1u64;
@@ -310,9 +347,11 @@ async fn offloading(
         match connections.send_to_jetson(&frame_message).await {
             Ok(()) => {
                 frames_sent += 1;
-                debug!("Sent frame {} (dataset frame {}) to Jetson (total sent: {})",
-                    logical_sequence_id, dataset_frame_id, frames_sent);
-            },
+                debug!(
+                    "Sent frame {} (dataset frame {}) to Jetson (total sent: {})",
+                    logical_sequence_id, dataset_frame_id, frames_sent
+                );
+            }
             Err(e) => {
                 error!("Failed to send frame {} to Jetson: {}", dataset_frame_id, e);
                 // Try to reconnect once
