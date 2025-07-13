@@ -60,8 +60,10 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 continue;
             }
         };
-        let mut controller_guard = shared_state.controller_stream.lock().await;
-        *controller_guard = Some(stream);
+        {
+            let mut controller_guard = shared_state.controller_stream.lock().await;
+            *controller_guard = Some(stream);
+        }
 
         let shutdown_flag = Arc::clone(&should_shutdown);
         let state = shared_state.clone();
@@ -129,21 +131,26 @@ async fn handle_connection(
                 }
 
                 if !pi_listener_started {
+                    let listener = TcpListener::bind(format!("0.0.0.0:{}", JETSON_PORT))
+                        .await
+                        .map_err(|e| format!("Failed to bind Pi listener: {}", e))?;
+                    info!(
+                        "Jetson listening for Pi connections on port {}",
+                        JETSON_PORT
+                    );
+
                     let pi_state = state.clone();
                     let pi_shutdown = Arc::clone(&should_shutdown);
 
                     tokio::spawn(async move {
-                        if let Err(e) = start_pi_listener(pi_shutdown, pi_state).await {
+                        if let Err(e) = handle_pi_listener(listener, pi_shutdown, pi_state).await {
                             error!("Pi listener failed: {}", e);
                         }
                     });
 
                     pi_listener_started = true;
-                    info!("Pi listener started on port {}", JETSON_PORT);
-
-                    sleep(Duration::from_millis(100)).await;
+                    info!("Pi listener is ready");
                 }
-
                 {
                     let mut controller_guard = state.controller_stream.lock().await;
                     if let Some(ref mut stream) = *controller_guard {
@@ -186,16 +193,11 @@ async fn handle_connection(
     Ok(())
 }
 
-async fn start_pi_listener(
+async fn handle_pi_listener(
+    listener: TcpListener,
     should_shutdown: Arc<AtomicBool>,
     state: SharedState,
 ) -> Result<(), Box<dyn error::Error>> {
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", JETSON_PORT)).await?;
-    info!(
-        "Jetson listening for Pi connections on port {}",
-        JETSON_PORT
-    );
-
     while !should_shutdown.load(Ordering::Relaxed) {
         tokio::select! {
             accept_result = listener.accept() => {
