@@ -1,5 +1,5 @@
 use log::{debug, error, info};
-use shared::constants::{controller_address, jetson_address, CONTROLLER_ADDRESS, CONTROLLER_PORT, INFERENCE_TENSORRT_PATH, JETSON_PORT};
+use shared::constants::{controller_address, jetson_address, INFERENCE_TENSORRT_PATH, JETSON_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
     ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
