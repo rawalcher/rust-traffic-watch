@@ -18,22 +18,14 @@ pub const PYTHON_VENV_PATH: &str = "python3";
 pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
 pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
 
-pub fn pi_full_address() -> String {
+pub fn pi_address() -> String {
     format!("{}:{}", PI_ADDRESS, PI_PORT)
 }
 
-pub fn jetson_full_address() -> String {
+pub fn jetson_address() -> String {
     format!("{}:{}", JETSON_ADDRESS, JETSON_PORT)
 }
 
-pub fn controller_bind_address() -> String {
+pub fn controller_address() -> String {
     format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_PORT)
-}
-
-pub fn jetson_bind_address() -> String {
-    format!("{}:{}", JETSON_ADDRESS, JETSON_PORT)
-}
-
-pub fn pi_bind_address() -> String {
-    format!("{}:{}", PI_ADDRESS, PI_PORT)
 }
