@@ -2,9 +2,9 @@ pub const CONTROLLER_PORT: u16 = 9090;
 pub const PI_PORT: u16 = 8080;
 pub const JETSON_PORT: u16 = 9092;
 
-pub const PI_ADDRESS: &str = "192.168.68.57";
-pub const JETSON_ADDRESS: &str = "192.168.68.64";
-pub const CONTROLLER_ADDRESS: &str = "192.168.68.70";
+pub const CONTROLLER_ADDRESS: &str = "10.0.0.20";
+pub const JETSON_ADDRESS: &str = "10.0.0.21";
+pub const PI_ADDRESS: &str = "10.0.0.22";
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
 pub const DEFAULT_DURATION_SECONDS: u64 = 120;
