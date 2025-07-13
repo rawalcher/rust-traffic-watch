@@ -128,19 +128,6 @@ async fn handle_connection(
                     *config_guard = Some(config);
                 }
 
-                {
-                    let mut controller_guard = state.controller_stream.lock().await;
-                    if let Some(ref mut stream) = *controller_guard {
-                        if let Err(e) =
-                            send_message(stream, &ControlMessage::PreheatingComplete).await
-                        {
-                            error!("Failed to send preheating complete: {}", e);
-                            return Err(format!("Failed to send preheating complete: {}", e));
-                        }
-                        info!("Sent preheating complete to controller");
-                    }
-                }
-
                 if !pi_listener_started {
                     let pi_state = state.clone();
                     let pi_shutdown = Arc::clone(&should_shutdown);
@@ -152,7 +139,22 @@ async fn handle_connection(
                     });
 
                     pi_listener_started = true;
-                    info!("Pi listener started");
+                    info!("Pi listener started on port {}", JETSON_PORT);
+
+                    sleep(Duration::from_millis(100)).await;
+                }
+
+                {
+                    let mut controller_guard = state.controller_stream.lock().await;
+                    if let Some(ref mut stream) = *controller_guard {
+                        if let Err(e) =
+                            send_message(stream, &ControlMessage::PreheatingComplete).await
+                        {
+                            error!("Failed to send preheating complete: {}", e);
+                            return Err(format!("Failed to send preheating complete: {}", e));
+                        }
+                        info!("Sent preheating complete to controller");
+                    }
                 }
             }
             Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
