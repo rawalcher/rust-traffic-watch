@@ -7,10 +7,10 @@ use shared::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 use log::{info, debug, error, warn};
-use shared::constants::{jetson_address, pi_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, INFERENCE_PYTORCH_PATH};
+use shared::constants::{jetson_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, INFERENCE_PYTORCH_PATH};
 
 struct Connections {
     controller_stream: TcpStream,
