@@ -1,13 +1,13 @@
 use csv::Writer;
-use log::{debug, error, info};
-use shared::constants::{jetson_address, pi_address, DEFAULT_MODEL};
+use log::{debug, error, info, warn};
+use shared::constants::{controller_address, DEFAULT_MODEL, JETSON_ADDRESS, PI_ADDRESS};
 use shared::{
     current_timestamp_micros, receive_message, send_message, ControlMessage, ExperimentConfig,
     ExperimentMode, NetworkMessage, ProcessingResult,
 };
 use std::env;
 use std::error;
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 
 struct Connections {
@@ -16,19 +16,39 @@ struct Connections {
 }
 
 impl Connections {
-    async fn new(config: &ExperimentConfig) -> Result<Self, Box<dyn error::Error + Send + Sync>> {
-        info!("Connecting to Pi...");
-        let pi_stream = TcpStream::connect(pi_address()).await?;
-        info!("Connected to Pi");
+    async fn wait_for_clients(config: &ExperimentConfig) -> Result<Self, Box<dyn error::Error + Send + Sync>> {
+        let listener = TcpListener::bind(controller_address()).await?;
+        info!("Controller listening on {}", controller_address());
 
-        let jetson_stream = if matches!(config.mode, ExperimentMode::Offload) {
-            info!("Connecting to Jetson...");
-            let stream = TcpStream::connect(jetson_address()).await?;
-            info!("Connected to Jetson");
-            Some(stream)
-        } else {
-            None
-        };
+        let mut pi_stream: Option<TcpStream> = None;
+        let mut jetson_stream: Option<TcpStream> = None;
+
+        let expected_connections = if matches!(config.mode, ExperimentMode::Offload) { 2 } else { 1 };
+        let mut connections_received = 0;
+
+        info!("Waiting for {} client(s) to connect...", expected_connections);
+
+        while connections_received < expected_connections {
+            let (stream, addr) = listener.accept().await?;
+            info!("Client connected from: {}", addr);
+
+            let addr_str = addr.ip().to_string();
+            if addr_str.eq(PI_ADDRESS){
+                pi_stream = Some(stream);
+                info!("Pi connected");
+                connections_received += 1;
+            } else if addr_str.eq(JETSON_ADDRESS) && matches!(config.mode, ExperimentMode::Offload) {
+                jetson_stream = Some(stream);
+                info!("Jetson connected");
+                connections_received += 1;
+            } else {
+                warn!("Unexpected connection from {}", addr);
+            }
+        }
+
+        let pi_stream = pi_stream.ok_or("Pi never connected")?;
+
+        info!("All expected clients connected!");
 
         Ok(Self {
             pi_stream,
@@ -221,8 +241,8 @@ async fn run_experiment(
     config: ExperimentConfig,
 ) -> Result<Vec<ProcessingResult>, Box<dyn error::Error + Send + Sync>> {
     info!("Starting experiment: {}", config.experiment_id);
-
-    let mut connections = Connections::new(&config).await?;
+    
+    let mut connections = Connections::wait_for_clients(&config).await?;
     connections.send_start_experiment(&config).await?;
     let expected_devices = if matches!(config.mode, ExperimentMode::Offload) { 2 } else { 1 };
     connections.wait_for_preheating(expected_devices).await?;

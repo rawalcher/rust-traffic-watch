@@ -62,14 +62,21 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     info!("Pi Sender starting...");
 
-    let listener = TcpListener::bind(pi_address()).await?;
-    info!("Listening on port {}", PI_PORT);
-
     let should_shutdown = Arc::new(AtomicBool::new(false));
 
     while !should_shutdown.load(Ordering::Relaxed) {
-        let (mut controller_stream, addr) = listener.accept().await?;
-        info!("Controller connected: {}", addr);
+        info!("Connecting to controller...");
+        let mut controller_stream = match TcpStream::connect(shared::constants::controller_address()).await {
+            Ok(stream) => {
+                info!("Connected to controller");
+                stream
+            }
+            Err(e) => {
+                error!("Failed to connect to controller: {}", e);
+                sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
 
         let message = receive_message::<NetworkMessage>(&mut controller_stream).await?;
 
@@ -303,8 +310,8 @@ async fn offloading(
         match connections.send_to_jetson(&frame_message).await {
             Ok(()) => {
                 frames_sent += 1;
-                debug!("Sent frame {} (dataset frame {}) to Jetson (total sent: {})", 
-                      logical_sequence_id, dataset_frame_id, frames_sent);
+                debug!("Sent frame {} (dataset frame {}) to Jetson (total sent: {})",
+                    logical_sequence_id, dataset_frame_id, frames_sent);
             },
             Err(e) => {
                 error!("Failed to send frame {} to Jetson: {}", dataset_frame_id, e);

@@ -1,5 +1,5 @@
 use log::{debug, error, info};
-use shared::constants::{jetson_address, INFERENCE_TENSORRT_PATH, JETSON_PORT};
+use shared::constants::{INFERENCE_TENSORRT_PATH, JETSON_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
     ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
@@ -8,8 +8,9 @@ use shared::{
 use std::error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration};
 
 #[derive(Clone)]
 struct SharedState {
@@ -33,41 +34,35 @@ impl SharedState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn error::Error>> {
     if std::env::var("RUST_LOG").is_err() {
-        unsafe {
-            // same as in pi_sender will change later
-            std::env::set_var("RUST_LOG", "info");
-        }
+        unsafe { std::env::set_var("RUST_LOG", "info"); }
     }
     env_logger::init();
 
     info!("Jetson Receiver starting...");
 
-    let controller_listener = match TcpListener::bind(jetson_address()).await {
-        Ok(listener) => {
-            info!("Listening on Port {}", JETSON_PORT);
-            listener
-        }
-        Err(_) => {
-            info!("Fallback to 127.0.0.1:9092");
-            TcpListener::bind("127.0.0.1:9092").await?
-        }
-    };
-
     let should_shutdown = Arc::new(AtomicBool::new(false));
     let shared_state = SharedState::new();
 
     while !should_shutdown.load(Ordering::Relaxed) {
-        let (stream, addr) = controller_listener.accept().await?;
-        info!("New connection from: {}", addr);
+        info!("Connecting to controller...");
+        let stream = match TcpStream::connect(shared::constants::controller_address()).await {
+            Ok(stream) => {
+                info!("Connected to controller");
+                stream
+            }
+            Err(e) => {
+                error!("Failed to connect to controller: {}", e);
+                sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
 
         let shutdown_flag = Arc::clone(&should_shutdown);
         let state = shared_state.clone();
 
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, shutdown_flag, addr, state).await {
-                error!("Connection error from {}: {}", addr, e);
-            }
-        });
+        if let Err(e) = handle_connection(stream, shutdown_flag, state).await {
+            error!("Connection error: {}", e);
+        }
     }
 
     info!("Jetson Receiver stopped");
@@ -77,7 +72,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 async fn handle_connection(
     mut stream: TcpStream,
     should_shutdown: Arc<AtomicBool>,
-    addr: std::net::SocketAddr,
     state: SharedState,
 ) -> Result<(), String> {
     loop {
@@ -90,8 +84,8 @@ async fn handle_connection(
         match message_result {
             Ok(NetworkMessage::Control(ControlMessage::StartExperiment { config })) => {
                 info!(
-                    "Starting preheating for experiment: {} with model {} (from {})",
-                    config.experiment_id, config.model_name, addr
+                    "Starting preheating for experiment: {} with model {}",
+                    config.experiment_id, config.model_name
                 );
 
                 let new_detector = match PersistentPythonDetector::new(
@@ -125,11 +119,11 @@ async fn handle_connection(
                 info!("Sent preheating complete to controller");
             }
             Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
-                info!("Received experiment start signal from {}!", addr);
+                info!("Received experiment start signal!");
                 state.experiment_started.store(true, Ordering::Relaxed);
             }
             Ok(NetworkMessage::Control(ControlMessage::Shutdown)) => {
-                info!("Shutdown requested from {}", addr);
+                info!("Shutdown requested");
 
                 let mut detector_guard = state.detector.lock().await;
                 if let Some(mut det) = detector_guard.take() {
@@ -169,10 +163,10 @@ async fn handle_connection(
                 }
             }
             Ok(_) => {
-                debug!("Received unexpected message type from {}", addr);
+                debug!("Received unexpected message type");
             }
             Err(e) => {
-                info!("Connection from {} ended: {}", addr, e);
+                info!("Connection ended: {}", e);
                 break;
             }
         }
@@ -180,6 +174,7 @@ async fn handle_connection(
 
     Ok(())
 }
+
 async fn process_frame_and_send_result(
     mut timing: TimingPayload,
     model_name: &str,
