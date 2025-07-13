@@ -10,58 +10,37 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, Duration, Instant};
 use log::{info, debug, error, warn};
-use shared::constants::{jetson_address, pi_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, INFERENCE_PYTORCH_PATH, controller_address};
+use shared::constants::{jetson_address, pi_address, FRAME_HEIGHT, FRAME_WIDTH, MAX_FRAME_SEQUENCE, PI_PORT, INFERENCE_PYTORCH_PATH};
 
-struct PersistentConnections {
+struct Connections {
     controller_stream: TcpStream,
     jetson_stream: Option<TcpStream>,
-    result_stream: Option<TcpStream>,
 }
 
-impl PersistentConnections {
+impl Connections {
     fn new(controller_stream: TcpStream) -> Self {
         Self {
             controller_stream,
             jetson_stream: None,
-            result_stream: None,
         }
-    }
-
-    async fn connect_to_controller_for_results(&mut self) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-        let stream = TcpStream::connect(controller_address()).await?;
-        self.result_stream = Some(stream);
-        info!("Connected persistent result stream to controller");
-        Ok(())
     }
 
     async fn connect_to_jetson(&mut self) -> Result<(), Box<dyn error::Error + Send + Sync>> {
         let stream = TcpStream::connect(jetson_address()).await?;
         self.jetson_stream = Some(stream);
-        info!("Connected persistent stream to Jetson");
+        info!("Connected to Jetson");
         Ok(())
+    }
+
+    async fn send_to_controller(&mut self, message: &ControlMessage) -> Result<(), Box<dyn error::Error + Send + Sync>> {
+        send_message(&mut self.controller_stream, message).await
     }
 
     async fn send_to_jetson(&mut self, message: &NetworkMessage) -> Result<(), Box<dyn error::Error + Send + Sync>> {
         if let Some(ref mut stream) = self.jetson_stream {
-            send_message(stream, message).await?;
-            Ok(())
+            send_message(stream, message).await
         } else {
             Err("No Jetson connection available".into())
-        }
-    }
-
-    async fn send_result_to_controller(&mut self, timing: &TimingPayload, inference: InferenceResult) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-        let result = ProcessingResult {
-            timing: timing.clone(),
-            inference,
-        };
-        let message = ControlMessage::ProcessingResult(result);
-
-        if let Some(ref mut stream) = self.result_stream {
-            send_message(stream, &message).await?;
-            Ok(())
-        } else {
-            Err("No controller result connection available".into())
         }
     }
 
@@ -83,7 +62,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
     info!("Pi Sender starting...");
 
-    let listener = TcpListener::bind(&pi_address()).await?;
+    let listener = TcpListener::bind(pi_address()).await?;
     info!("Listening on port {}", PI_PORT);
 
     let should_shutdown = Arc::new(AtomicBool::new(false));
@@ -107,7 +86,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
                     config.experiment_id, config.mode, config.model_name, throughput_mode
                 );
 
-                let connections = PersistentConnections::new(controller_stream);
+                let connections = Connections::new(controller_stream);
 
                 match config.mode {
                     ExperimentMode::LocalOnly => {
@@ -135,7 +114,7 @@ async fn main() -> Result<(), Box<dyn error::Error + Send + Sync>> {
 
 async fn run_local_experiment(
     config: ExperimentConfig,
-    mut connections: PersistentConnections,
+    mut connections: Connections,
     throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("LOCAL MODE: Starting preheating phase...");
@@ -154,8 +133,8 @@ async fn run_local_experiment(
         }
     };
 
-    connections.connect_to_controller_for_results().await?;
-    send_preheating_complete().await?;
+    connections.send_to_controller(&ControlMessage::PreheatingComplete).await?;
+    info!("Sent preheating complete to controller");
 
     loop {
         match connections.wait_for_control_message().await? {
@@ -181,15 +160,15 @@ async fn run_local_experiment(
 
 async fn run_offload_experiment(
     config: ExperimentConfig,
-    mut connections: PersistentConnections,
+    mut connections: Connections,
     throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     info!("OFFLOAD MODE: Starting preheating phase...");
 
     connections.connect_to_jetson().await?;
-    info!("Pi ready for offload mode");
-    send_preheating_complete().await?;
-
+    connections.send_to_controller(&ControlMessage::PreheatingComplete).await?;
+    info!("Sent preheating complete to controller");
+    
     loop {
         match connections.wait_for_control_message().await? {
             ControlMessage::BeginExperiment => {
@@ -212,19 +191,10 @@ async fn run_offload_experiment(
     Ok(())
 }
 
-async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    let mut controller_stream = TcpStream::connect(controller_address()).await?;
-    let message = ControlMessage::PreheatingComplete;
-    send_message(&mut controller_stream, &message).await?;
-
-    info!("Sent preheating complete signal to controller");
-    Ok(())
-}
-
 async fn local_processing(
     config: ExperimentConfig,
     mut detector: PersistentPythonDetector,
-    connections: &mut PersistentConnections,
+    connections: &mut Connections,
     throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let throughput_controller = FrameThroughputController::new(throughput_mode);
@@ -265,7 +235,13 @@ async fn local_processing(
             }
         };
 
-        if let Err(e) = connections.send_result_to_controller(&timing, inference_result.clone()).await {
+        let result = ProcessingResult {
+            timing: timing.clone(),
+            inference: inference_result.clone(),
+        };
+        let result_message = ControlMessage::ProcessingResult(result);
+
+        if let Err(e) = connections.send_to_controller(&result_message).await {
             error!("Failed to send result to controller for frame {}: {}", dataset_frame_id, e);
         }
 
@@ -290,7 +266,7 @@ async fn local_processing(
 
 async fn offloading(
     config: ExperimentConfig,
-    mut connections: PersistentConnections,
+    mut connections: Connections,
     throughput_mode: ThroughputMode,
 ) -> Result<(), Box<dyn error::Error + Send + Sync>> {
     let throughput_controller = FrameThroughputController::new(throughput_mode);

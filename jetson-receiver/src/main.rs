@@ -1,5 +1,5 @@
 use log::{debug, error, info};
-use shared::constants::{controller_address, jetson_address, INFERENCE_TENSORRT_PATH, JETSON_PORT};
+use shared::constants::{jetson_address, INFERENCE_TENSORRT_PATH, JETSON_PORT};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, receive_message, send_message,
     ControlMessage, ExperimentConfig, InferenceResult, NetworkMessage,
@@ -17,7 +17,6 @@ struct SharedState {
     detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
     experiment_started: Arc<AtomicBool>,
     frames_processed: Arc<Mutex<u64>>,
-    controller_result_stream: Arc<Mutex<Option<TcpStream>>>,
 }
 
 impl SharedState {
@@ -27,34 +26,7 @@ impl SharedState {
             detector: Arc::new(Mutex::new(None)),
             experiment_started: Arc::new(AtomicBool::new(false)),
             frames_processed: Arc::new(Mutex::new(0)),
-            controller_result_stream: Arc::new(Mutex::new(None)),
         }
-    }
-
-    async fn connect_to_controller(&self) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-        let stream = TcpStream::connect(&controller_address()).await?;
-
-        let mut result_stream_guard = self.controller_result_stream.lock().await;
-        *result_stream_guard = Some(stream);
-
-        info!("Connected persistent result stream to controller");
-        Ok(())
-    }
-
-    async fn send_result_to_controller(&self, timing: &TimingPayload, inference: InferenceResult) -> Result<(), Box<dyn error::Error + Send + Sync>> {
-        let result = ProcessingResult {
-            timing: timing.clone(),
-            inference,
-        };
-        let message = ControlMessage::ProcessingResult(result);
-
-        let mut stream_guard = self.controller_result_stream.lock().await;
-        if let Some(ref mut stream) = *stream_guard {
-            send_message(stream, &message).await?;
-        } else {
-            return Err("No controller result connection available".into());
-        }
-        Ok(())
     }
 }
 
@@ -70,7 +42,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
     info!("Jetson Receiver starting...");
 
-    let controller_listener = match TcpListener::bind(&jetson_address()).await {
+    let controller_listener = match TcpListener::bind(jetson_address()).await {
         Ok(listener) => {
             info!("Listening on Port {}", JETSON_PORT);
             listener
@@ -146,15 +118,11 @@ async fn handle_connection(
                     *config_guard = Some(config);
                 }
 
-                if let Err(e) = state.connect_to_controller().await {
-                    error!("Failed to connect to controller for results: {}", e);
-                    return Err(format!("Failed to connect to controller: {}", e));
-                }
-
-                if let Err(e) = send_preheating_complete().await {
+                if let Err(e) = send_message(&mut stream, &ControlMessage::PreheatingComplete).await {
                     error!("Failed to send preheating complete: {}", e);
                     return Err(format!("Failed to send preheating complete: {}", e));
                 }
+                info!("Sent preheating complete to controller");
             }
             Ok(NetworkMessage::Control(ControlMessage::BeginExperiment)) => {
                 info!("Received experiment start signal from {}!", addr);
@@ -186,7 +154,7 @@ async fn handle_connection(
                 if let Some(config) = config_opt {
                     let model_name = config.model_name.clone();
 
-                    match process_frame_and_send_result(timing, &model_name, &state).await {
+                    match process_frame_and_send_result(timing, &model_name, &state, &mut stream).await {
                         Ok(()) => {
                             let mut frames_guard = state.frames_processed.lock().await;
                             *frames_guard += 1;
@@ -212,20 +180,11 @@ async fn handle_connection(
 
     Ok(())
 }
-
-async fn send_preheating_complete() -> Result<(), Box<dyn error::Error + Send + Sync>> {
-    let mut controller_stream = TcpStream::connect(&controller_address()).await?;
-    let message = ControlMessage::PreheatingComplete;
-    send_message(&mut controller_stream, &message).await?;
-
-    info!("Sent preheating complete signal to controller");
-    Ok(())
-}
-
 async fn process_frame_and_send_result(
     mut timing: TimingPayload,
     model_name: &str,
     state: &SharedState,
+    result_stream: &mut TcpStream,
 ) -> Result<(), String> {
     timing.jetson_received = Some(current_timestamp_micros());
     timing.jetson_inference_start = Some(current_timestamp_micros());
@@ -242,7 +201,13 @@ async fn process_frame_and_send_result(
     timing.jetson_inference_complete = Some(current_timestamp_micros());
     timing.jetson_sent_result = Some(current_timestamp_micros());
 
-    state.send_result_to_controller(&timing, inference_result).await
+    let result = ProcessingResult {
+        timing: timing.clone(),
+        inference: inference_result,
+    };
+    let result_message = ControlMessage::ProcessingResult(result);
+
+    send_message(result_stream, &result_message).await
         .map_err(|e| {
             error!("Failed to send result to controller for frame {}: {}", timing.sequence_id, e);
             e.to_string()
