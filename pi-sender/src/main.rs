@@ -350,34 +350,12 @@ async fn process_locally_with_python(
 
 fn load_frame_from_image(
     frame_number: u64,
-) -> Result<Vec<u8>, Box<dyn error::Error + Send + Sync>> {
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let filename = format!("pi-sender/sample/seq3-drone_{:07}.jpg", frame_number);
     debug!("Attempting to load frame from: {}", filename);
 
-    let original_data = std::fs::read(&filename)?;
-    debug!("Loaded original frame {} ({} bytes)", frame_number, original_data.len());
+    let data = std::fs::read(&filename)?;
+    debug!("Loaded frame {} ({} bytes)", frame_number, data.len());
 
-    let img = ImageReader::new(Cursor::new(&original_data))
-        .with_guessed_format()?
-        .decode()?;
-
-    debug!("Original image dimensions: {}x{}", img.width(), img.height());
-
-    let resized = img.resize_exact(640, 640, image::imageops::FilterType::Lanczos3);
-
-    let mut output_buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut output_buffer);
-
-    resized.write_to(&mut cursor, ImageFormat::Jpeg)?;
-
-    debug!(
-        "Resized frame {} from {} bytes to {} bytes ({}x{} -> 640x640)",
-        frame_number,
-        original_data.len(),
-        output_buffer.len(),
-        img.width(),
-        img.height()
-    );
-
-    Ok(output_buffer)
+    Ok(data)
 }
