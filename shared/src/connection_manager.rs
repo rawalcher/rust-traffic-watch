@@ -208,20 +208,11 @@ impl ConnectionListener {
 
     pub async fn accept_expected_connections(&self) -> Result<Vec<(ConnectionRole, TcpStream)>, Box<dyn std::error::Error + Send + Sync>> {
         let mut accepted = Vec::new();
-        let mut remaining = self.expected_connections.clone();
 
-        while !remaining.is_empty() {
+        for (role, _) in &self.expected_connections {
             let (stream, addr) = self.listener.accept().await?;
-            let addr_str = addr.ip().to_string();
-
-            if let Some(pos) = remaining.iter().position(|(_, expected_ip)| expected_ip == &addr_str) {
-                let (role, _) = remaining.remove(pos);
-                info!("Accepted {:?} connection from {}", role, addr);
-                accepted.push((role, stream));
-            } else {
-                warn!("Unexpected connection from {}", addr);
-                drop(stream);
-            }
+            info!("Accepted {:?} connection from {}", role, addr);
+            accepted.push((role.clone(), stream));
         }
 
         Ok(accepted)
