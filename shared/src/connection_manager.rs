@@ -64,27 +64,37 @@ impl PersistentConnection {
         let mut attempts = 0;
 
         while attempts < self.max_retries {
-            match TcpStream::connect(&self.address).await {
-                Ok(stream) => {
+            let connect_future = TcpStream::connect(&self.address);
+            let timeout_duration = Duration::from_secs(5);
+
+            match tokio::time::timeout(timeout_duration, connect_future).await {
+                Ok(Ok(stream)) => {
                     let mut guard = self.stream.lock().await;
                     *guard = Some(stream);
                     info!("{:?} {:?} connection established to {}", 
-                          self.role, self.connection_type, self.address);
+                      self.role, self.connection_type, self.address);
                     return Ok(());
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     attempts += 1;
-                    if attempts >= self.max_retries {
-                        return Err(format!(
-                            "Failed to connect {:?} {:?} after {} attempts: {}",
-                            self.role, self.connection_type, self.max_retries, e
-                        ).into());
-                    }
-                    warn!("{:?} {:?} connection attempt {} failed, retrying...", 
-                          self.role, self.connection_type, attempts);
-                    sleep(self.retry_delay).await;
+                    warn!("{:?} {:?} connection attempt {} failed: {}, retrying...", 
+                      self.role, self.connection_type, attempts, e);
+                }
+                Err(_) => {
+                    attempts += 1;
+                    warn!("{:?} {:?} connection attempt {} timed out, retrying...", 
+                      self.role, self.connection_type, attempts);
                 }
             }
+
+            if attempts >= self.max_retries {
+                return Err(format!(
+                    "Failed to connect {:?} {:?} after {} attempts",
+                    self.role, self.connection_type, self.max_retries
+                ).into());
+            }
+
+            sleep(self.retry_delay).await;
         }
 
         unreachable!()
@@ -180,7 +190,7 @@ impl ConnectionManager {
 
     pub fn get_connection(&self, role: ConnectionRole, conn_type: ConnectionType) -> Option<&PersistentConnection> {
         self.connections.iter().find(|conn| {
-            matches!((&conn.role, &conn.connection_type), (r, t) if 
+            matches!((&conn.role, &conn.connection_type), (r, t) if
                 std::mem::discriminant(r) == std::mem::discriminant(&role) &&
                 std::mem::discriminant(t) == std::mem::discriminant(&conn_type))
         })
