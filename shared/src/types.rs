@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_FPS};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TimingPayload {
@@ -15,12 +15,15 @@ pub struct TimingPayload {
     pub jetson_inference_complete: Option<u64>,
     pub jetson_sent_result: Option<u64>,
     pub controller_received: Option<u64>,
+    pub pi_inference_start: Option<u64>,
+    pub pi_inference_complete: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ThroughputMode {
     High,
     Fps,
+    Custom(f32),
 }
 
 pub struct FrameThroughputController {
@@ -35,11 +38,12 @@ impl FrameThroughputController {
     pub fn set_mode(&mut self, mode: ThroughputMode) {
         self.mode = mode;
     }
-
-    pub fn get_frame_skip(&self) -> u64 {
+    
+    pub fn get_frame_skip(&self, config_fps: f32) -> u64 {
         match self.mode {
-            ThroughputMode::High => 3,
-            ThroughputMode::Fps => 30,
+            ThroughputMode::High => 1,
+            ThroughputMode::Fps => (30.0 / config_fps) as u64,
+            ThroughputMode::Custom(fps) => (30.0 / fps) as u64,
         }
     }
 }
@@ -63,6 +67,7 @@ pub struct ExperimentConfig {
 pub enum ControlMessage {
     StartExperiment { config: ExperimentConfig },
     ProcessingResult(ProcessingResult),
+    DataConnectionReady,
     PreheatingComplete,
     ReadyToStart,
     BeginExperiment,
@@ -130,6 +135,8 @@ impl TimingPayload {
             jetson_inference_complete: None,
             jetson_sent_result: None,
             controller_received: None,
+            pi_inference_start: None,
+            pi_inference_complete: None,
         }
     }
 
