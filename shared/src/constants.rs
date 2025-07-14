@@ -1,6 +1,6 @@
-pub const CONTROLLER_CONTROL_PORT: u16 = 50001;
-pub const CONTROLLER_DATA_PORT: u16 = 50002;
-pub const JETSON_DATA_PORT: u16 = 50003;
+pub const CONTROLLER_CONTROL_PORT: u16 = 9090;
+pub const CONTROLLER_DATA_PORT: u16 = 9091;
+pub const JETSON_DATA_PORT: u16 = 9092;
 
 pub const CONTROLLER_ADDRESS: &str = "10.0.0.20";
 pub const JETSON_ADDRESS: &str = "10.0.0.21";
