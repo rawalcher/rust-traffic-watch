@@ -1,6 +1,5 @@
-pub const CONTROLLER_CONTROL_PORT: u16 = 9090;
-pub const CONTROLLER_DATA_PORT: u16 = 9091;
-pub const JETSON_DATA_PORT: u16 = 9092;
+pub const CONTROLLER_PORT: u16 = 9090;
+pub const JETSON_PORT: u16 = 9091;
 
 pub const CONTROLLER_ADDRESS: &str = "10.0.0.20";
 pub const JETSON_ADDRESS: &str = "10.0.0.21";
@@ -18,26 +17,21 @@ pub const PYTHON_VENV_PATH: &str = "python3";
 pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
 pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
 
-pub fn controller_control_address() -> String {
-    format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_CONTROL_PORT)
+// pi and jetson connect here
+pub fn controller_address() -> String {
+    format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_PORT)
+}
+pub fn controller_bind_address() -> String {
+    format!("0.0.0.0:{}", CONTROLLER_PORT)
 }
 
-pub fn controller_data_address() -> String {
-    format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_DATA_PORT)
-}
-
+// pi connects here
 pub fn jetson_data_address() -> String {
-    format!("{}:{}", JETSON_ADDRESS, JETSON_DATA_PORT)
+    format!("{}:{}", JETSON_ADDRESS, JETSON_PORT)
+}
+pub fn jetson_bind_address() -> String {
+    format!("0.0.0.0:{}", JETSON_PORT)
 }
 
-pub fn controller_control_bind_address() -> String {
-    format!("0.0.0.0:{}", CONTROLLER_CONTROL_PORT)
-}
 
-pub fn controller_data_bind_address() -> String {
-    format!("0.0.0.0:{}", CONTROLLER_DATA_PORT)
-}
 
-pub fn jetson_data_bind_address() -> String {
-    format!("0.0.0.0:{}", JETSON_DATA_PORT)
-}

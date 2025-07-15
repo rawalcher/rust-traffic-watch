@@ -1,12 +1,44 @@
 use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_FPS};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TimingPayload {
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DeviceId {
+    Pi,
+    Jetson,
+}
+
+impl fmt::Display for DeviceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeviceId::Pi => write!(f, "Pi"),
+            DeviceId::Jetson => write!(f, "Jetson"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Message {
+    Hello(DeviceId),
+    Frame(FrameMessage),
+    Result(InferenceMessage),
+    Control(ControlMessage),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ControlMessage {
+    StartExperiment { config: ExperimentConfig },
+    Pulse { timing: TimingMetadata },
+    Shutdown,
+    ReadyToStart,
+    BeginExperiment,
+    PreheatingComplete,
+    DataConnectionReady,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TimingMetadata {
     pub sequence_id: u64,
-    pub frame_data: Option<Vec<u8>>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
     pub pi_hostname: String,
     pub pi_capture_start: Option<u64>,
     pub pi_sent_to_jetson: Option<u64>,
@@ -14,84 +46,31 @@ pub struct TimingPayload {
     pub jetson_inference_start: Option<u64>,
     pub jetson_inference_complete: Option<u64>,
     pub jetson_sent_result: Option<u64>,
+    pub controller_sent_pulse: Option<u64>,
     pub controller_received: Option<u64>,
-    pub pi_inference_start: Option<u64>,
-    pub pi_inference_complete: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
-pub enum ThroughputMode {
-    High,
-    Fps,
-    Custom(f32),
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameMessage {
+    pub sequence_id: u64,
+    pub frame_data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub timing: TimingMetadata,
 }
 
-pub struct FrameThroughputController {
-    mode: ThroughputMode,
-}
-
-impl FrameThroughputController {
-    pub fn new(mode: ThroughputMode) -> Self {
-        Self { mode }
-    }
-
-    pub fn set_mode(&mut self, mode: ThroughputMode) {
-        self.mode = mode;
-    }
-    
-    pub fn get_frame_skip(&self, config_fps: f32) -> u64 {
-        match self.mode {
-            ThroughputMode::High => 1,
-            ThroughputMode::Fps => (30.0 / config_fps) as u64,
-            ThroughputMode::Custom(fps) => (30.0 / fps) as u64,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum ExperimentMode {
-    LocalOnly,
-    Offload,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ExperimentConfig {
-    pub experiment_id: String,
-    pub model_name: String,
-    pub mode: ExperimentMode,
-    pub duration_seconds: u64,
-    pub fixed_fps: f32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum ControlMessage {
-    StartExperiment { config: ExperimentConfig },
-    ProcessingResult(ProcessingResult),
-    DataConnectionReady,
-    PreheatingComplete,
-    ReadyToStart,
-    BeginExperiment,
-    Shutdown,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum NetworkMessage {
-    Control(ControlMessage),
-    Frame(TimingPayload),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ProcessingResult {
-    pub timing: TimingPayload,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceMessage {
+    pub sequence_id: u64,
     pub inference: InferenceResult,
+    pub timing: TimingMetadata,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceResult {
     pub sequence_id: u64,
     pub detections: Vec<Detection>,
     pub processing_time_us: u64,
-    pub pi_hostname: String,
     pub frame_size_bytes: u32,
     pub detection_count: u32,
     pub image_width: u32,
@@ -100,79 +79,26 @@ pub struct InferenceResult {
     pub experiment_mode: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Detection {
     pub class: String,
-    pub bbox: [f32; 4], // x, y, width, height
+    pub bbox: [f32; 4],
     pub confidence: f32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ObjectCounts {
-    pub cars: u32,
-    pub trucks: u32,
-    pub buses: u32,
-    pub motorcycles: u32,
-    pub bicycles: u32,
-    pub pedestrians: u32,
-    pub total_vehicles: u32,
-    pub total_objects: u32,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExperimentConfig {
+    pub experiment_id: String,
+    pub model_name: String,
+    pub mode: ExperimentMode,
+    pub duration_seconds: u64,
+    pub fixed_fps: f32,
 }
 
-impl TimingPayload {
-    pub fn new(sequence_id: u64) -> Self {
-        let hostname = get_hostname();
-        Self {
-            sequence_id,
-            frame_data: None,
-            width: None,
-            height: None,
-            pi_hostname: hostname,
-            pi_capture_start: Some(current_timestamp_micros()),
-            pi_sent_to_jetson: None,
-            jetson_received: None,
-            jetson_inference_start: None,
-            jetson_inference_complete: None,
-            jetson_sent_result: None,
-            controller_received: None,
-            pi_inference_start: None,
-            pi_inference_complete: None,
-        }
-    }
-
-    pub fn add_frame_data(&mut self, data: Vec<u8>, width: u32, height: u32) {
-        self.frame_data = Some(data);
-        self.width = Some(width);
-        self.height = Some(height);
-    }
-
-    pub fn pi_overhead_us(&self) -> Option<u64> {
-        match (self.pi_capture_start, self.pi_sent_to_jetson) {
-            (Some(start), Some(sent)) => Some(sent - start),
-            _ => None,
-        }
-    }
-
-    pub fn network_latency_us(&self) -> Option<u64> {
-        match (self.pi_sent_to_jetson, self.jetson_received) {
-            (Some(sent), Some(received)) => Some(received - sent),
-            _ => None,
-        }
-    }
-
-    pub fn jetson_processing_us(&self) -> Option<u64> {
-        match (self.jetson_inference_start, self.jetson_inference_complete) {
-            (Some(start), Some(complete)) => Some(complete - start),
-            _ => None,
-        }
-    }
-
-    pub fn total_latency_us(&self) -> Option<u64> {
-        match (self.pi_capture_start, self.controller_received) {
-            (Some(start), Some(received)) => Some(received - start),
-            _ => None,
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExperimentMode {
+    LocalOnly,
+    Offload,
 }
 
 impl ExperimentConfig {
@@ -185,6 +111,18 @@ impl ExperimentConfig {
             fixed_fps: DEFAULT_FPS,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectCounts {
+    pub cars: u32,
+    pub trucks: u32,
+    pub buses: u32,
+    pub motorcycles: u32,
+    pub bicycles: u32,
+    pub pedestrians: u32,
+    pub total_vehicles: u32,
+    pub total_objects: u32,
 }
 
 pub fn current_timestamp_micros() -> u64 {
