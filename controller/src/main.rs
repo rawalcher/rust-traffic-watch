@@ -170,7 +170,7 @@ impl ControllerService {
                         match result {
                             Ok(mut processing_result) => {
                                 processing_result.timing.controller_received = Some(current_timestamp_micros());
-                                debug!("Received result {} (total: {})", 
+                                debug!("Received result {} (total: {})",
                                        processing_result.timing.sequence_id, results.len() + 1);
                                 results.push(processing_result);
                             }

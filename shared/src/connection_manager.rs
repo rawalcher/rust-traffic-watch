@@ -3,13 +3,25 @@ use tokio::time::{sleep, Duration};
 use log::{info, error, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::net::SocketAddr;
 use crate::network::{send_message, receive_message};
+use crate::constants::{CONTROLLER_ADDRESS, JETSON_ADDRESS, PI_ADDRESS};
 
 #[derive(Debug, Clone)]
 pub enum ConnectionRole {
     Controller,
     Pi,
     Jetson,
+}
+
+impl ConnectionRole {
+    pub fn expected_ip(&self) -> &'static str {
+        match self {
+            ConnectionRole::Controller => CONTROLLER_ADDRESS,
+            ConnectionRole::Pi => PI_ADDRESS,
+            ConnectionRole::Jetson => JETSON_ADDRESS,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -215,16 +227,44 @@ impl ConnectionListener {
             expected_connections,
         })
     }
-
+    
     pub async fn accept_expected_connections(&self) -> Result<Vec<(ConnectionRole, TcpStream)>, Box<dyn std::error::Error + Send + Sync>> {
         let mut accepted = Vec::new();
+        let mut remaining_roles: Vec<ConnectionRole> = self.expected_connections.iter()
+            .map(|(role, _)| role.clone())
+            .collect();
 
-        for (role, _) in &self.expected_connections {
+        while !remaining_roles.is_empty() {
             let (stream, addr) = self.listener.accept().await?;
-            info!("Accepted {:?} connection from {}", role, addr);
-            accepted.push((role.clone(), stream));
+
+            if let Some(role) = self.find_matching_role(&addr, &remaining_roles) {
+                info!("Accepted {:?} connection from {} (IP validated)", role, addr);
+                accepted.push((role.clone(), stream));
+                remaining_roles.retain(|r| !matches!((r, &role), (ConnectionRole::Controller, ConnectionRole::Controller) | (ConnectionRole::Pi, ConnectionRole::Pi) | (ConnectionRole::Jetson, ConnectionRole::Jetson)));
+            } else {
+                warn!("Rejected connection from {} - not from any expected IP", addr);
+                // Connection is automatically dropped when stream goes out of scope
+            }
         }
 
         Ok(accepted)
+    }
+
+    fn find_matching_role(&self, addr: &SocketAddr, remaining_roles: &[ConnectionRole]) -> Option<ConnectionRole> {
+        let client_ip = addr.ip().to_string();
+
+        for role in remaining_roles {
+            let expected_ip = role.expected_ip();
+
+            if expected_ip == "127.0.0.1" && (client_ip == "127.0.0.1" || client_ip == "::1") {
+                return Some(role.clone());
+            }
+            
+            if client_ip == expected_ip {
+                return Some(role.clone());
+            }
+        }
+
+        None
     }
 }
