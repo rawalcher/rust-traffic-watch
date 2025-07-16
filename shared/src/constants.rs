@@ -26,7 +26,7 @@ pub fn controller_bind_address() -> String {
 }
 
 // pi connects here
-pub fn jetson_data_address() -> String {
+pub fn jetson_address() -> String {
     format!("{}:{}", JETSON_ADDRESS, JETSON_PORT)
 }
 pub fn jetson_bind_address() -> String {

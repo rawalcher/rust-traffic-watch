@@ -6,7 +6,6 @@ use shared::{
     InferenceMessage, Message, PersistentPythonDetector,
 };
 use std::error::Error;
-use std::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf};
 use tokio::sync::mpsc;
@@ -16,9 +15,9 @@ use shared::network::{read_message, send_message};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     env_logger::init();
-    info!("Jetson connecting to controller at {}", controller_bind_address());
+    info!("Jetson connecting to controller at {}", controller_address());
 
-    let controller_stream = TcpStream::connect(controller_bind_address()).await?;
+    let controller_stream = TcpStream::connect(controller_address()).await?;
     let (mut ctrl_reader, mut ctrl_writer) = controller_stream.into_split();
 
     send_message(&mut ctrl_writer, &Message::Hello(DeviceId::Jetson)).await?;

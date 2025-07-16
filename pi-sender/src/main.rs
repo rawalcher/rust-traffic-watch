@@ -12,9 +12,9 @@ use shared::network::{send_message, read_message};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     env_logger::init();
-    info!("Connecting to controller at {}", controller_bind_address());
+    info!("Connecting to controller at {}", controller_address());
 
-    let controller_stream = TcpStream::connect(controller_bind_address()).await?;
+    let controller_stream = TcpStream::connect(controller_address()).await?;
     let (mut ctrl_reader, mut ctrl_writer) = controller_stream.into_split();
 
     send_message(&mut ctrl_writer, &Message::Hello(shared::types::DeviceId::Pi)).await?;
@@ -50,10 +50,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             detector.shutdown()?;
         }
         ExperimentMode::Offload => {
-            info!("Connecting to Jetson on {}", jetson_bind_address());
+            info!("Connecting to Jetson on {}", jetson_address());
             sleep(Duration::from_millis(7500)).await;
             
-            let jetson_stream = TcpStream::connect(jetson_bind_address()).await?;
+            let jetson_stream = TcpStream::connect(jetson_address()).await?;
             let (_, mut jetson_writer) = jetson_stream.into_split();
             send_message(&mut jetson_writer, &Message::Hello(shared::types::DeviceId::Pi)).await?;
             

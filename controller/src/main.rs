@@ -7,7 +7,7 @@ use csv::Writer;
 use log::debug;
 use tokio::sync::mpsc;
 use shared::constants::*;
-use shared::connection::{get_device_sender, is_device_ready, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role};
+use shared::connection::{get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role};
 use shared::types::*;
 use shared::current_timestamp_micros;
 use shared::DeviceId::Pi;
