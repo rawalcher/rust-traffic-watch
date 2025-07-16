@@ -8,7 +8,7 @@ pub const PI_ADDRESS: &str = "10.0.0.22";
 // echo 120 | sudo tee /sys/devices/pwm-fan/target_pwm
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
-pub const DEFAULT_DURATION_SECONDS: u64 = 30;
+pub const DEFAULT_DURATION_SECONDS: u64 = 120;
 pub const DEFAULT_FPS: f32 = 1.0;
 
 pub const MAX_FRAME_SEQUENCE: u64 = 30000;
