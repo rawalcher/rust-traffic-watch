@@ -28,7 +28,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
  
     debug!("test1");
-    wait_for_pi_on_jetson(Role::Jetson { frame_handler: frame_tx }).await?;
+    tokio::spawn(async move {
+        if let Err(e) = wait_for_pi_on_jetson(Role::Jetson { frame_handler: frame_tx }).await {
+            error!("Pi connection handler failed: {:?}", e);
+        }
+    });
     info!("Pi connected, Jetson data listener running");
 
     let model_name = config.model_name.clone();
