@@ -6,22 +6,20 @@ import cv2
 import numpy as np
 import tensorrt as trt
 import pycuda.driver as cuda
-from PIL import Image
-import io
+import pycuda.autoinit
+
 
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
 class PersistentTRTInferenceServer:
     def __init__(self, engine_path='yolov5s.engine'):
-        self.engine_path = engine_path
         self.engine = self.load_engine(engine_path)
         self.context = self.engine.create_execution_context()
         self.allocate_buffers()
-        self.model_input_size = (640, 640)
+        self.model_input_size = (640, 640)  # default for yolov5s
 
         self.names = ['person', 'bicycle', 'car', 'motorcycle', 'airplane',
-                      'bus', 'train', 'truck', 'boat', 'traffic light']
-
+                      'bus', 'train', 'truck', 'boat', 'traffic light']  # add more if needed
         self.traffic_classes = {0, 1, 2, 3, 5, 6, 7}
         self.class_mapping = {
             'car': 'cars', 'truck': 'trucks', 'bus': 'buses',
@@ -32,17 +30,8 @@ class PersistentTRTInferenceServer:
         print("READY", flush=True)
 
     def load_engine(self, path):
-        print(f"Loading TensorRT engine from: {path}", file=sys.stderr, flush=True)
-        try:
-            with open(path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
-                engine = runtime.deserialize_cuda_engine(f.read())
-                if engine is None:
-                    raise RuntimeError(f"Failed to load engine from {path}")
-                print(f"Successfully loaded engine", file=sys.stderr, flush=True)
-                return engine
-        except Exception as e:
-            print(f"Error loading engine: {e}", file=sys.stderr, flush=True)
-            raise
+        with open(path, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime:
+            return runtime.deserialize_cuda_engine(f.read())
 
     def allocate_buffers(self):
         self.inputs = []
@@ -62,113 +51,71 @@ class PersistentTRTInferenceServer:
                 self.outputs.append((host_mem, device_mem))
 
     def preprocess(self, image_bytes):
-        try:
-            image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-            img = np.array(image)
-            height, width = img.shape[:2]
+        img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        height, width = img.shape[:2]
 
-            print(f"Original image size: {width}x{height}", file=sys.stderr, flush=True)
+        if width != 640 or height != 640:
+            img_resized = cv2.resize(img, (640, 640))
+        else:
+            img_resized = img
 
-            if width != 640 or height != 640:
-                img_resized = cv2.resize(img, (640, 640))
-            else:
-                img_resized = img
-
-            img_input = img_resized.astype(np.float32) / 255.0
-            img_input = img_input.transpose((2, 0, 1))  # HWC → CHW
-            img_input = np.expand_dims(img_input, axis=0)
-
-            return img_input, width, height
-        except Exception as e:
-            print(f"Error in preprocessing: {e}", file=sys.stderr, flush=True)
-            raise
+        img_input = img_resized.astype(np.float32) / 255.0
+        img_input = img_input.transpose((2, 0, 1))  # HWC → CHW
+        img_input = np.expand_dims(img_input, axis=0)
+        return img_input, width, height
 
     def postprocess(self, output, input_shape, orig_w, orig_h):
-        global counts
-        try:
-            counts = {key: 0 for key in self.class_mapping.values()}
-            counts.update({'total_vehicles': 0, 'total_objects': 0})
-            detections = []
+        predictions = output.reshape(-1, 7)
+        detections = []
+        counts = {key: 0 for key in self.class_mapping.values()}
+        counts.update({'total_vehicles': 0, 'total_objects': 0})
 
-            if len(output.shape) == 1:
-                if output.shape[0] == 25200 * 85:
-                    output = output.reshape(1, 25200, 85)
-                else:
-                    print(f"Unexpected output shape: {output.shape}", file=sys.stderr, flush=True)
-                    return detections, counts
+        for det in predictions:
+            if det[6] < 0.25:
+                continue
 
-            print(f"Output shape: {output.shape}", file=sys.stderr, flush=True)
+            class_id = int(det[5])
+            if class_id not in self.traffic_classes or class_id >= len(self.names):
+                continue
 
-            for detection in output[0]:
-                if len(detection) < 85:
-                    continue
+            class_name = self.names[class_id]
 
-                x, y, w, h = detection[:4]
-                confidence = detection[4]
-                class_scores = detection[5:]
+            x1 = float(det[0]) * orig_w / input_shape[1]
+            y1 = float(det[1]) * orig_h / input_shape[0]
+            x2 = float(det[2]) * orig_w / input_shape[1]
+            y2 = float(det[3]) * orig_h / input_shape[0]
+            confidence = float(det[6])
 
-                if confidence < 0.25:
-                    continue
+            detections.append({
+                'class': class_name,
+                'bbox': [x1, y1, x2 - x1, y2 - y1],
+                'confidence': confidence
+            })
 
-                class_id = np.argmax(class_scores)
-                class_confidence = class_scores[class_id]
+            if class_name in self.class_mapping:
+                counts[self.class_mapping[class_name]] += 1
+                if class_name in self.vehicle_classes:
+                    counts['total_vehicles'] += 1
 
-                final_confidence = confidence * class_confidence
-
-                if final_confidence < 0.25:
-                    continue
-
-                if class_id not in self.traffic_classes or class_id >= len(self.names):
-                    continue
-
-                class_name = self.names[class_id]
-
-                x1 = (x - w/2) * orig_w / input_shape[1]
-                y1 = (y - h/2) * orig_h / input_shape[0]
-                x2 = (x + w/2) * orig_w / input_shape[1]
-                y2 = (y + h/2) * orig_h / input_shape[0]
-
-                detections.append({
-                    'class': class_name,
-                    'bbox': [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
-                    'confidence': float(final_confidence)
-                })
-
-                # Same counting logic as PyTorch version
-                if class_name in self.class_mapping:
-                    counts[self.class_mapping[class_name]] += 1
-                    if class_name in self.vehicle_classes:
-                        counts['total_vehicles'] += 1
-
-            counts['total_objects'] = len(detections)
-            print(f"Found {len(detections)} detections", file=sys.stderr, flush=True)
-
-            return detections, counts
-        except Exception as e:
-            print(f"Error in postprocessing: {e}", file=sys.stderr, flush=True)
-            return [], counts
+        counts['total_objects'] = len(detections)
+        return detections, counts
 
     def infer(self, image_bytes):
-        try:
-            input_tensor, width, height = self.preprocess(image_bytes)
-            np.copyto(self.inputs[0][0], input_tensor.ravel())
+        input_tensor, width, height = self.preprocess(image_bytes)
+        np.copyto(self.inputs[0][0], input_tensor.ravel())
 
-            cuda.memcpy_htod_async(self.inputs[0][1], self.inputs[0][0], self.stream)
-            self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
-            cuda.memcpy_dtoh_async(self.outputs[0][0], self.outputs[0][1], self.stream)
-            self.stream.synchronize()
+        cuda.memcpy_htod_async(self.inputs[0][1], self.inputs[0][0], self.stream)
+        self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
+        cuda.memcpy_dtoh_async(self.outputs[0][0], self.outputs[0][1], self.stream)
+        self.stream.synchronize()
 
-            detections, counts = self.postprocess(self.outputs[0][0], self.model_input_size, width, height)
-
-            return {
-                'detections': detections,
-                'image_width': width,
-                'image_height': height,
-                'counts': counts
-            }
-        except Exception as e:
-            print(f"Error in inference: {e}", file=sys.stderr, flush=True)
-            raise
+        detections, counts = self.postprocess(self.outputs[0][0], self.model_input_size, width, height)
+        return {
+            'detections': detections,
+            'image_width': width,
+            'image_height': height,
+            'counts': counts
+        }
 
     def send_response(self, data):
         json_data = json.dumps(data).encode('utf-8')
@@ -177,7 +124,6 @@ class PersistentTRTInferenceServer:
         sys.stdout.buffer.flush()
 
     def run_server(self):
-        # Same empty counts initialization as PyTorch version
         empty_counts = {key: 0 for key in self.class_mapping.values()}
         empty_counts.update({'total_vehicles': 0, 'total_objects': 0})
 
@@ -194,8 +140,6 @@ class PersistentTRTInferenceServer:
                 result = self.infer(frame_data)
                 self.send_response(result)
             except Exception as e:
-                error_msg = f"Error processing frame: {str(e)}"
-                print(error_msg, file=sys.stderr, flush=True)
                 self.send_response({
                     'error': str(e),
                     'detections': [],
