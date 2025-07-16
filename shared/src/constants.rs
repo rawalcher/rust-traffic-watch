@@ -1,14 +1,11 @@
 pub const CONTROLLER_PORT: u16 = 9090;
 pub const JETSON_PORT: u16 = 9092;
 
-// pub const CONTROLLER_ADDRESS: &str = "10.0.0.20";
-// pub const JETSON_ADDRESS: &str = "10.0.0.21";
-// pub const PI_ADDRESS: &str = "10.0.0.22";
+pub const CONTROLLER_ADDRESS: &str = "10.0.0.20";
+pub const JETSON_ADDRESS: &str = "10.0.0.21";
+pub const PI_ADDRESS: &str = "10.0.0.22";
 
 // echo 120 | sudo tee /sys/devices/pwm-fan/target_pwm
-pub const CONTROLLER_ADDRESS: &str = "127.0.0.1";
-pub const JETSON_ADDRESS: &str = "127.0.0.1";
-pub const PI_ADDRESS: &str = "127.0.0.1";
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
 pub const DEFAULT_DURATION_SECONDS: u64 = 30;
