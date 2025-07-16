@@ -1,5 +1,5 @@
 pub const CONTROLLER_PORT: u16 = 9090;
-pub const JETSON_PORT: u16 = 9091;
+pub const JETSON_PORT: u16 = 9092;
 
 pub const CONTROLLER_ADDRESS: &str = "10.0.0.20";
 pub const JETSON_ADDRESS: &str = "10.0.0.21";
@@ -15,7 +15,7 @@ pub const FRAME_HEIGHT: u32 = 1080;
 
 pub const PYTHON_VENV_PATH: &str = "python3";
 pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
-pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
+pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_pytorch.py";
 
 // pi and jetson connect here
 pub fn controller_address() -> String {

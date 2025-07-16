@@ -23,12 +23,12 @@ pub enum Message {
     Frame(FrameMessage),
     Result(InferenceMessage),
     Control(ControlMessage),
+    Pulse(TimingMetadata),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlMessage {
     StartExperiment { config: ExperimentConfig },
-    Pulse { timing: TimingMetadata },
     Shutdown,
     ReadyToStart,
     BeginExperiment,
@@ -39,6 +39,7 @@ pub enum ControlMessage {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TimingMetadata {
     pub sequence_id: u64,
+    pub frame_number: u64,
     pub pi_hostname: String,
     pub pi_capture_start: Option<u64>,
     pub pi_sent_to_jetson: Option<u64>,

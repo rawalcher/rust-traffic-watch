@@ -3,8 +3,10 @@ import io
 import json
 import struct
 import sys
+
 import torch
 from PIL import Image
+
 
 class PersistentPyTorchInferenceServer:
     def __init__(self, model_name='yolov5s'):
@@ -12,14 +14,9 @@ class PersistentPyTorchInferenceServer:
         self.model = torch.hub.load('ultralytics/yolov5', model_name, pretrained=True, trust_repo=True)
         self.model.eval()
 
-        if self.device.type == 'cuda':
-            self.model.to(self.device)
-            torch.backends.cudnn.benchmark = True
-            self.model.warmup(imgsz=(1, 3, 640, 640))
-        else:
-            torch.set_num_threads(1)
-            with torch.no_grad():
-                _ = self.model(torch.zeros(1, 3, 640, 640))
+        torch.set_num_threads(1)
+        with torch.no_grad():
+            _ = self.model(torch.zeros(1, 3, 640, 640))
 
         self.traffic_classes = {0, 1, 2, 3, 5, 6, 7}
         self.class_mapping = {
@@ -97,10 +94,12 @@ class PersistentPyTorchInferenceServer:
                     'counts': empty_counts
                 })
 
+
 def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else 'yolov5s'
     server = PersistentPyTorchInferenceServer(model_name)
     server.run_server()
+
 
 if __name__ == "__main__":
     main()

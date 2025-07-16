@@ -1,26 +1,46 @@
 use std::{env, error::Error};
+use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{info};
 
 use csv::Writer;
+use log::debug;
+use tokio::sync::mpsc;
 use shared::constants::*;
-use shared::connection::{get_device_sender, start_controller_listener};
+use shared::connection::{get_device_sender, is_device_ready, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role};
 use shared::types::*;
 use shared::current_timestamp_micros;
+use shared::DeviceId::Pi;
 
 pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Starting experiment: {}", config.experiment_id);
 
-    tokio::spawn(async {
-        if let Err(e) = start_controller_listener().await {
-            warn!("Connection listener error: {}", e);
+    let (inference_tx, mut inference_rx) = mpsc::unbounded_channel();
+    
+    let results: Arc<Mutex<Vec<InferenceMessage>>> = Arc::new(Mutex::new(Vec::new()));
+    let results_clone = Arc::clone(&results);
+
+    tokio::spawn(async move {
+        while let Some(result) = inference_rx.recv().await {
+            results_clone.lock().unwrap().push(result);
         }
     });
 
-    sleep(Duration::from_secs(2)).await;
-
+    tokio::spawn(start_controller_listener(Role::Controller {
+        result_handler: inference_tx,
+    }));
+    
+    if matches!(config.mode, ExperimentMode::Offload){
+        wait_for_devices(&[DeviceId::Jetson, Pi]).await;
+    }
+    if matches!(config.mode, ExperimentMode::LocalOnly){
+        wait_for_devices(&[Pi]).await;
+       
+    }
+    
     let msg = Message::Control(ControlMessage::StartExperiment { config: config.clone() });
-    for id in &[DeviceId::Pi, DeviceId::Jetson] {
+    for id in &[Pi, DeviceId::Jetson] {
+        debug!("Preparing to send StartExperiment");
         if matches!(config.mode, ExperimentMode::LocalOnly) && *id == DeviceId::Jetson {
             continue;
         }
@@ -28,17 +48,17 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
             sender.send(msg.clone())?;
         }
     }
-
-    for &id in &[DeviceId::Pi, DeviceId::Jetson] {
-        if matches!(config.mode, ExperimentMode::LocalOnly) && id == DeviceId::Jetson {
-            continue;
-        }
-        info!("Waiting for {:?} to be ready...", id);
-        sleep(Duration::from_millis(100)).await;
+    
+    if matches!(config.mode, ExperimentMode::Offload){
+        wait_for_device_readiness(&[DeviceId::Jetson, Pi]).await;
     }
+    if matches!(config.mode, ExperimentMode::LocalOnly){
+        wait_for_device_readiness(&[Pi]).await;
+    }
+   
 
     let begin_msg = Message::Control(ControlMessage::BeginExperiment);
-    for id in &[DeviceId::Pi, DeviceId::Jetson] {
+    for id in &[Pi, DeviceId::Jetson] {
         if matches!(config.mode, ExperimentMode::LocalOnly) && *id == DeviceId::Jetson {
             continue;
         }
@@ -47,31 +67,39 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
         }
     }
 
-    let mut results = Vec::new();
     let start = Instant::now();
     let mut sequence_id: u64 = 0;
+    let mut frame_number: u64 = 1;
 
     while start.elapsed().as_secs() < config.duration_seconds {
         if let Some(sender) = get_device_sender(&DeviceId::Pi).await {
             let mut timing = TimingMetadata::default();
             timing.sequence_id = sequence_id;
             timing.controller_sent_pulse = Some(current_timestamp_micros());
-            let pulse = Message::Control(ControlMessage::Pulse { timing });
+            timing.frame_number = frame_number;
+            let pulse = Message::Pulse(timing);
             sender.send(pulse)?;
             info!("Sent pulse {} to Pi", sequence_id);
             sequence_id += 1;
+            frame_number += 30;
         }
         sleep(Duration::from_millis(1000 / config.fixed_fps as u64)).await;
     }
-
+    
+    sleep(Duration::from_millis(2500)).await;
+    
     let shutdown = Message::Control(ControlMessage::Shutdown);
-    for id in &[DeviceId::Pi, DeviceId::Jetson] {
+    for id in &[Pi, DeviceId::Jetson] {
         if let Some(sender) = get_device_sender(id).await {
             let _ = sender.send(shutdown.clone());
         }
     }
 
-    generate_analysis_csv(&results, &config.experiment_id)?;
+    info!("Shutdown complete");
+
+    let locked_results = results.lock().unwrap();
+    generate_analysis_csv(&locked_results, &config.experiment_id)?;
+    
     Ok(())
 }
 
@@ -106,16 +134,19 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str) -
         return Ok(());
     }
 
+    info!("Generating analysis csv");
+
     std::fs::create_dir_all("logs")?;
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("logs/experiment_{}_{}.csv", experiment_id, timestamp);
     let mut writer = Writer::from_path(&filename)?;
 
     let headers = [
-        "sequence_id", "pi_hostname", "pi_capture_start", "pi_sent_to_jetson",
+        "sequence_id", "frame_number", "pi_hostname", "pi_capture_start", "pi_sent_to_jetson",
         "jetson_received", "jetson_inference_start", "jetson_inference_complete",
-        "jetson_sent_result", "controller_received", "pi_overhead_us",
-        "network_latency_us", "processing_time_us", "total_latency_us",
+        "jetson_sent_result", "controller_sent_pulse", "controller_received",
+        "pi_overhead_us", "jetson_inference_us", "jetson_overhead_us", "network_latency_us", "total_latency_us",
+        "processing_latency_pi_us",
         "frame_size_bytes", "detection_count", "image_width", "image_height",
         "model_name", "experiment_mode",
     ];
@@ -124,8 +155,18 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str) -
     for r in results {
         let t = &r.timing;
         let i = &r.inference;
+
+        let pi_overhead = opt_diff_val(t.pi_sent_to_jetson, t.pi_capture_start);
+        let jetson_inference = opt_diff_val(t.jetson_inference_complete, t.jetson_inference_start);
+        let jetson_overhead = opt_diff_val(t.jetson_sent_result, t.jetson_received);
+        let total_latency = opt_diff_val(t.controller_received, t.controller_sent_pulse);
+
+        let known_overhead = pi_overhead + jetson_overhead;
+        let network_latency = total_latency.saturating_sub(known_overhead);
+
         let record = vec![
             t.sequence_id.to_string(),
+            t.frame_number.to_string(),
             t.pi_hostname.clone(),
             opt(t.pi_capture_start),
             opt(t.pi_sent_to_jetson),
@@ -133,11 +174,14 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str) -
             opt(t.jetson_inference_start),
             opt(t.jetson_inference_complete),
             opt(t.jetson_sent_result),
+            opt(t.controller_sent_pulse),
             opt(t.controller_received),
-            opt(t.pi_overhead_us()),
-            opt(t.network_latency_us()),
+            pi_overhead.to_string(),
+            jetson_inference.to_string(),
+            jetson_overhead.to_string(),
+            network_latency.to_string(),
+            total_latency.to_string(),
             i.processing_time_us.to_string(),
-            opt(t.total_latency_us()),
             i.frame_size_bytes.to_string(),
             i.detection_count.to_string(),
             i.image_width.to_string(),
@@ -155,4 +199,11 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str) -
 
 fn opt<T: ToString>(opt: Option<T>) -> String {
     opt.map(|v| v.to_string()).unwrap_or_default()
+}
+
+fn opt_diff_val(a: Option<u64>, b: Option<u64>) -> u64 {
+    match (a, b) {
+        (Some(a), Some(b)) => a.saturating_sub(b),
+        _ => 0,
+    }
 }
