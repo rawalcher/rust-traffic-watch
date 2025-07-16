@@ -26,14 +26,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel();
 
- 
-    debug!("test1");
+    debug!("Starting Pi connection handler...");
     tokio::spawn(async move {
         if let Err(e) = wait_for_pi_on_jetson(Role::Jetson { frame_handler: frame_tx }).await {
             error!("Pi connection handler failed: {:?}", e);
         }
     });
-    info!("Pi connected, Jetson data listener running");
+
+    info!("Pi connection handler started, initializing detector...");
 
     let model_name = config.model_name.clone();
     let mut detector = tokio::task::spawn_blocking(move || {
@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         tokio::select! {
             Some(frame_msg) = frame_rx.recv() => {
+                info!("Received frame from Pi: sequence_id={}", frame_msg.sequence_id);
                 match handle_frame(frame_msg, &mut detector, &config).await {
                     Ok(result) => {
                         send_message(&mut ctrl_writer, &Message::Result(result)).await?;
@@ -116,12 +117,17 @@ async fn handle_frame(
     frame.timing.jetson_received = Some(current_timestamp_micros());
     frame.timing.jetson_inference_start = Some(current_timestamp_micros());
 
+    debug!("Processing frame {} with {} bytes", frame.sequence_id, frame.frame_data.len());
+
     let inference = perform_python_inference_with_counts(
-        &mut frame,
+        &frame,
         detector,
         &config.model_name,
         "offload",
     )?;
+
+    info!("Jetson inference complete for sequence_id: {}, detections: {}, size: {}x{}", 
+          frame.sequence_id, inference.detection_count, inference.image_width, inference.image_height);
 
     frame.timing.jetson_inference_complete = Some(current_timestamp_micros());
     frame.timing.jetson_sent_result = Some(current_timestamp_micros());
