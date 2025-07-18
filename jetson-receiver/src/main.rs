@@ -115,7 +115,6 @@ async fn handle_frame(
 ) -> Result<InferenceMessage, Box<dyn Error + Send + Sync>> {
 
     frame.timing.jetson_received = Some(current_timestamp_micros());
-    frame.timing.jetson_inference_start = Some(current_timestamp_micros());
 
     debug!("Processing frame {} with {} bytes", frame.sequence_id, frame.frame_data.len());
 
@@ -129,7 +128,6 @@ async fn handle_frame(
     info!("Jetson inference complete for sequence_id: {}, detections: {}, size: {}x{}", 
           frame.sequence_id, inference.detection_count, inference.image_width, inference.image_height);
 
-    frame.timing.jetson_inference_complete = Some(current_timestamp_micros());
     frame.timing.jetson_sent_result = Some(current_timestamp_micros());
 
     Ok(InferenceMessage {

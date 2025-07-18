@@ -44,8 +44,6 @@ pub struct TimingMetadata {
     pub pi_capture_start: Option<u64>,
     pub pi_sent_to_jetson: Option<u64>,
     pub jetson_received: Option<u64>,
-    pub jetson_inference_start: Option<u64>,
-    pub jetson_inference_complete: Option<u64>,
     pub jetson_sent_result: Option<u64>,
     pub controller_sent_pulse: Option<u64>,
     pub controller_received: Option<u64>,

@@ -151,13 +151,13 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str, c
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("logs/experiment_{}_{}.csv", experiment_id, timestamp);
     let mut writer = Writer::from_path(&filename)?;
-
+    
     let headers = [
         "sequence_id", "frame_number", "pi_hostname", "pi_capture_start", "pi_sent_to_jetson",
         "jetson_received", "jetson_inference_start", "jetson_inference_complete",
         "jetson_sent_result", "controller_sent_pulse", "controller_received",
-        "pi_overhead_us", "jetson_inference_us", "jetson_overhead_us", "network_latency_us", "total_latency_us",
-        "processing_latency_pi_us",
+        "pi_overhead_us", "jetson_overhead_us", "network_latency_us", "total_latency_us",
+        "inference_us",
         "frame_size_bytes", "detection_count", "image_width", "image_height",
         "model_name", "experiment_mode",
     ];
@@ -168,7 +168,6 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str, c
         let i = &r.inference;
 
         let pi_overhead = opt_diff_val(t.pi_sent_to_jetson, t.pi_capture_start);
-        let jetson_inference = opt_diff_val(t.jetson_inference_complete, t.jetson_inference_start);
         let jetson_overhead = opt_diff_val(t.jetson_sent_result, t.jetson_received);
         let total_latency = opt_diff_val(t.controller_received, t.controller_sent_pulse);
 
@@ -188,13 +187,10 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str, c
             opt(t.pi_capture_start),
             opt(t.pi_sent_to_jetson),
             opt(t.jetson_received),
-            opt(t.jetson_inference_start),
-            opt(t.jetson_inference_complete),
             opt(t.jetson_sent_result),
             opt(t.controller_sent_pulse),
             opt(t.controller_received),
             pi_overhead.to_string(),
-            jetson_inference.to_string(),
             jetson_overhead.to_string(),
             network_latency.to_string(),
             total_latency.to_string(),
