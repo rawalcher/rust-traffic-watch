@@ -73,7 +73,7 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
     let mut frame_number: u64 = 1;
 
     while start.elapsed().as_secs() < config.duration_seconds {
-        if let Some(sender) = get_device_sender(&DeviceId::Pi).await {
+        if let Some(sender) = get_device_sender(&Pi).await {
             let mut timing = TimingMetadata::default();
             timing.sequence_id = sequence_id;
             timing.controller_sent_pulse = Some(current_timestamp_micros());
@@ -83,6 +83,10 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
             info!("Sent pulse {} to Pi", sequence_id);
             sequence_id += 1;
             frame_number += 30;
+            if frame_number >= 30000 {
+                // wrap to prevent file not found
+                frame_number = 1;
+            }
         }
         sleep(Duration::from_millis((1000.0 / config.fixed_fps) as u64)).await;
     }
