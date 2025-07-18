@@ -154,8 +154,7 @@ fn generate_analysis_csv(results: &Vec<InferenceMessage>, experiment_id: &str, c
     
     let headers = [
         "sequence_id", "frame_number", "pi_hostname", "pi_capture_start", "pi_sent_to_jetson",
-        "jetson_received", "jetson_inference_start", "jetson_inference_complete",
-        "jetson_sent_result", "controller_sent_pulse", "controller_received",
+        "jetson_received", "jetson_sent_result", "controller_sent_pulse", "controller_received",
         "pi_overhead_us", "jetson_overhead_us", "network_latency_us", "total_latency_us",
         "inference_us",
         "frame_size_bytes", "detection_count", "image_width", "image_height",
