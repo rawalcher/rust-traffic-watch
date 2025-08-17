@@ -3,23 +3,23 @@ import io
 import json
 import struct
 import sys
+import warnings
+
 import torch
 from PIL import Image
 
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.cuda.amp.autocast.*")
+
 class PersistentPyTorchInferenceServer:
     def __init__(self, model_name='yolov5s'):
-        self.setup_device()
+        print(f"Loading model: {model_name}", file=sys.stderr, flush=True)
         self.model = torch.hub.load('ultralytics/yolov5', model_name, pretrained=True, trust_repo=True)
         self.model.eval()
 
-        if self.device.type == 'cuda':
-            self.model.to(self.device)
-            torch.backends.cudnn.benchmark = True
-            self.model.warmup(imgsz=(1, 3, 640, 640))
-        else:
-            torch.set_num_threads(1)
-            with torch.no_grad():
-                _ = self.model(torch.zeros(1, 3, 640, 640))
+        torch.set_num_threads(1)
+
+        with torch.no_grad():
+            _ = self.model(torch.zeros(1, 3, 640, 640))
 
         self.traffic_classes = {0, 1, 2, 3, 5, 6, 7}
         self.class_mapping = {
@@ -28,9 +28,6 @@ class PersistentPyTorchInferenceServer:
         }
         self.vehicle_classes = {'car', 'truck', 'bus', 'motorcycle', 'bicycle'}
         print("READY", flush=True)
-
-    def setup_device(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     def process_frame(self, image_bytes):
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
@@ -89,6 +86,8 @@ class PersistentPyTorchInferenceServer:
                 result = self.process_frame(frame_data)
                 self.send_response(result)
             except Exception as e:
+                error_msg = f"Error processing frame: {str(e)}"
+                print(error_msg, file=sys.stderr, flush=True)
                 self.send_response({
                     'error': str(e),
                     'detections': [],
@@ -97,10 +96,12 @@ class PersistentPyTorchInferenceServer:
                     'counts': empty_counts
                 })
 
+
 def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else 'yolov5s'
     server = PersistentPyTorchInferenceServer(model_name)
     server.run_server()
+
 
 if __name__ == "__main__":
     main()
