@@ -32,8 +32,6 @@ pub enum ControlMessage {
     Shutdown,
     ReadyToStart,
     BeginExperiment,
-    PreheatingComplete,
-    DataConnectionReady,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

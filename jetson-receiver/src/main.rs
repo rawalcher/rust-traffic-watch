@@ -6,6 +6,8 @@ use shared::{
     InferenceMessage, Message, PersistentPythonDetector,
 };
 use std::error::Error;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf};
 use tokio::sync::mpsc;
@@ -24,12 +26,30 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let config = wait_for_experiment_config(&mut ctrl_reader).await?;
 
+    let pending_frame: Arc<Mutex<Option<FrameMessage>>> = Arc::new(Mutex::new(None));
+    let pending_frame_network = Arc::clone(&pending_frame);
+    let pending_frame_inference = Arc::clone(&pending_frame);
+
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel();
 
     debug!("Starting Pi connection handler...");
     tokio::spawn(async move {
         if let Err(e) = wait_for_pi_on_jetson(Role::Jetson { frame_handler: frame_tx }).await {
             error!("Pi connection handler failed: {:?}", e);
+        }
+    });
+
+    tokio::spawn(async move {
+        while let Some(frame) = frame_rx.recv().await {
+            let seq_id = frame.sequence_id;
+            let mut pending = pending_frame_network.lock().await;
+            let old_seq = pending.as_ref().map(|f| f.sequence_id);
+            *pending = Some(frame);
+
+            if let Some(old) = old_seq {
+                debug!("Jetson: Dropped frame {} for newer frame {}", old, seq_id);
+            }
+            info!("Jetson: Updated pending frame to sequence_id={}", seq_id);
         }
     });
 
@@ -49,26 +69,53 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     send_message(&mut ctrl_writer, &Message::Control(ControlMessage::ReadyToStart)).await?;
 
     wait_for_experiment_start(&mut ctrl_reader).await?;
-    info!("Experiment started. Waiting for frames from Pi...");
+    info!("Experiment started. Processing frames...");
 
-    loop {
-        tokio::select! {
-            Some(frame_msg) = frame_rx.recv() => {
-                info!("Received frame from Pi: sequence_id={}", frame_msg.sequence_id);
-                match handle_frame(frame_msg, &mut detector, &config).await {
+    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
+
+    let inference_config = config.clone();
+    let pending_frame_for_inference = Arc::clone(&pending_frame_inference);
+
+    let inference_task = tokio::spawn(async move {
+        loop {
+            let frame = {
+                let mut pending = pending_frame_for_inference.lock().await;
+                pending.take()
+            };
+
+            if let Some(frame_msg) = frame {
+                info!("Jetson: Starting inference for sequence_id={}", frame_msg.sequence_id);
+
+                match handle_frame(frame_msg, &mut detector, &inference_config).await {
                     Ok(result) => {
-                        send_message(&mut ctrl_writer, &Message::Result(result)).await?;
+                        let seq_id = result.sequence_id;
+                        if let Err(e) = result_tx.send(result) {
+                            error!("Failed to send result to channel: {}", e);
+                            break;
+                        }
+                        info!("Jetson: Completed inference for sequence_id={}", seq_id);
                     }
                     Err(e) => {
                         error!("Failed to process frame: {}", e);
                     }
                 }
+            } else {
+                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
             }
+        }
+        detector.shutdown()
+    });
 
+    loop {
+        tokio::select! {
+            Some(result) = result_rx.recv() => {
+                send_message(&mut ctrl_writer, &Message::Result(result)).await?;
+            }
             msg = read_message(&mut ctrl_reader) => {
                 match msg? {
                     Message::Control(ControlMessage::Shutdown) => {
                         info!("Shutdown received");
+                        inference_task.abort();
                         break;
                     }
                     unexpected => {
@@ -79,7 +126,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     }
 
-    detector.shutdown()?;
     info!("Jetson done. Exiting.");
     Ok(())
 }
@@ -125,7 +171,7 @@ async fn handle_frame(
         "offload",
     )?;
 
-    info!("Jetson inference complete for sequence_id: {}, detections: {}, size: {}x{}", 
+    info!("Jetson inference complete for sequence_id: {}, detections: {}, size: {}x{}",
           frame.sequence_id, inference.detection_count, inference.image_width, inference.image_height);
 
     frame.timing.jetson_sent_result = Some(current_timestamp_micros());
@@ -164,7 +210,5 @@ where
                 warn!("Expected Control message while waiting for {}, got: {:?}", context, other);
             }
         }
-
     }
 }
-
