@@ -2,14 +2,17 @@ pub const CONTROLLER_PORT: u16 = 9090;
 pub const JETSON_PORT: u16 = 9092;
 
 pub const CONTROLLER_ADDRESS: &str = "localhost";
-pub const JETSON_ADDRESS: &str = "localhost";
+pub const JETSON_ADDRESS: &str = "10.0.0.21";
 pub const PI_ADDRESS: &str = "localhost";
 
 // echo 120 | sudo tee /sys/devices/pwm-fan/target_pwm
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
-pub const DEFAULT_DURATION_SECONDS: u64 = 600;
-pub const DEFAULT_FPS: f32 = 1.0;
+pub const DEFAULT_DURATION_SECONDS: u64 = 30;
+
+// at 24 fps or higher rust starts to behave weirdly
+pub const DEFAULT_SEND_FPS: f32 = 23.0;
+pub const SOURCE_FPS: f32 = 30.0;
 
 pub const MAX_FRAME_SEQUENCE: u64 = 30000;
 pub const FRAME_WIDTH: u32 = 1920;
@@ -35,5 +38,7 @@ pub fn jetson_bind_address() -> String {
     format!("0.0.0.0:{}", JETSON_PORT)
 }
 
-
-
+pub fn get_frame_skip() -> Result<u64, &'static str> {
+    let skip = (SOURCE_FPS / DEFAULT_SEND_FPS).ceil() as u64;
+    Ok(skip.max(1))
+}

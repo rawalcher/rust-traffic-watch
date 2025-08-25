@@ -83,7 +83,7 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
             info!("Sent pulse {} to Pi", sequence_id);
             sequence_id += 1;
             frame_number += 30;
-            if frame_number >= 30000 {
+            if frame_number >= MAX_FRAME_SEQUENCE {
                 // wrap to prevent file not found
                 frame_number = 1;
             }
@@ -119,8 +119,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let fps = args.iter()
         .find(|arg| arg.starts_with("--fps="))
-        .map(|arg| arg.trim_start_matches("--fps=").parse::<f32>().unwrap_or(DEFAULT_FPS))
-        .unwrap_or(DEFAULT_FPS);
+        .map(|arg| arg.trim_start_matches("--fps=").parse::<f32>().unwrap_or(DEFAULT_SEND_FPS))
+        .unwrap_or(DEFAULT_SEND_FPS);
 
     let modes = match args.iter().find(|a| a == &&"--local".to_string() || a == &&"--remote".to_string()) {
         Some(flag) if flag == "--local" => vec![ExperimentMode::LocalOnly],
