@@ -1,4 +1,3 @@
-# inference_tensorrt.py
 import json
 import struct
 import sys
@@ -19,7 +18,7 @@ class PersistentTRTInferenceServer:
         self.model_input_size = (640, 640)  # default for yolov5s
 
         self.names = ['person', 'bicycle', 'car', 'motorcycle', 'airplane',
-                      'bus', 'train', 'truck', 'boat', 'traffic light']  # add more if needed
+                      'bus', 'train', 'truck', 'boat', 'traffic light']
         self.traffic_classes = {0, 1, 2, 3, 5, 6, 7}
         self.class_mapping = {
             'car': 'cars', 'truck': 'trucks', 'bus': 'buses',
@@ -65,40 +64,102 @@ class PersistentTRTInferenceServer:
         return img_input, width, height
 
     def postprocess(self, output, input_shape, orig_w, orig_h):
-        predictions = output.reshape(-1, 7)
         detections = []
         counts = {key: 0 for key in self.class_mapping.values()}
         counts.update({'total_vehicles': 0, 'total_objects': 0})
 
-        for det in predictions:
-            if det[6] < 0.25:
-                continue
+        output = output.reshape(1, 25200, 85)[0]
 
-            class_id = int(det[5])
-            if class_id not in self.traffic_classes or class_id >= len(self.names):
-                continue
+        obj_conf = output[:, 4]
+        mask = obj_conf > 0.25
+        output = output[mask]
 
-            class_name = self.names[class_id]
+        if len(output) == 0:
+            return detections, counts
 
-            x1 = float(det[0]) * orig_w / input_shape[1]
-            y1 = float(det[1]) * orig_h / input_shape[0]
-            x2 = float(det[2]) * orig_w / input_shape[1]
-            y2 = float(det[3]) * orig_h / input_shape[0]
-            confidence = float(det[6])
+        class_probs = output[:, 5:]
+        class_ids = np.argmax(class_probs, axis=1)
+        class_confs = class_probs[np.arange(len(class_probs)), class_ids]
 
-            detections.append({
-                'class': class_name,
-                'bbox': [x1, y1, x2 - x1, y2 - y1],
-                'confidence': confidence
-            })
+        scores = obj_conf[mask] * class_confs
 
-            if class_name in self.class_mapping:
-                counts[self.class_mapping[class_name]] += 1
-                if class_name in self.vehicle_classes:
-                    counts['total_vehicles'] += 1
+        traffic_mask = np.isin(class_ids, list(self.traffic_classes))
+        if not traffic_mask.any():
+            return detections, counts
+
+        boxes = output[traffic_mask, :4]
+        scores = scores[traffic_mask]
+        class_ids = class_ids[traffic_mask]
+
+        x_c = boxes[:, 0]
+        y_c = boxes[:, 1]
+        w = boxes[:, 2]
+        h = boxes[:, 3]
+
+        x1 = (x_c - w/2) * orig_w / input_shape[1]
+        y1 = (y_c - h/2) * orig_h / input_shape[0]
+        x2 = (x_c + w/2) * orig_w / input_shape[1]
+        y2 = (y_c + h/2) * orig_h / input_shape[0]
+
+        boxes_for_nms = np.stack([x1, y1, x2, y2], axis=1)
+        keep = self.apply_nms(boxes_for_nms, scores, 0.45)
+
+        for i in keep:
+            class_id = class_ids[i]
+            if class_id < len(self.names):
+                class_name = self.names[class_id]
+
+                detections.append({
+                    'class': class_name,
+                    'bbox': [float(x1[i]), float(y1[i]),
+                             float(x2[i] - x1[i]), float(y2[i] - y1[i])],
+                    'confidence': float(scores[i])
+                })
+
+                if class_name in self.class_mapping:
+                    counts[self.class_mapping[class_name]] += 1
+                    if class_name in self.vehicle_classes:
+                        counts['total_vehicles'] += 1
 
         counts['total_objects'] = len(detections)
         return detections, counts
+
+    def apply_nms(self, boxes, scores, iou_threshold):
+        """Apply Non-Maximum Suppression"""
+        if len(boxes) == 0:
+            return []
+
+        x1 = boxes[:, 0]
+        y1 = boxes[:, 1]
+        x2 = boxes[:, 2]
+        y2 = boxes[:, 3]
+
+        areas = (x2 - x1) * (y2 - y1)
+        order = scores.argsort()[::-1]
+
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+
+            if order.size == 1:
+                break
+
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+
+            w = np.maximum(0.0, xx2 - xx1)
+            h = np.maximum(0.0, yy2 - yy1)
+            inter = w * h
+
+            ovr = inter / (areas[i] + areas[order[1:]] - inter)
+
+            inds = np.where(ovr <= iou_threshold)[0]
+            order = order[inds + 1]
+
+        return keep
 
     def infer(self, image_bytes):
         input_tensor, width, height = self.preprocess(image_bytes)
@@ -106,10 +167,14 @@ class PersistentTRTInferenceServer:
 
         cuda.memcpy_htod_async(self.inputs[0][1], self.inputs[0][0], self.stream)
         self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
-        cuda.memcpy_dtoh_async(self.outputs[0][0], self.outputs[0][1], self.stream)
+
+        for output in self.outputs:
+            cuda.memcpy_dtoh_async(output[0], output[1], self.stream)
         self.stream.synchronize()
 
-        detections, counts = self.postprocess(self.outputs[0][0], self.model_input_size, width, height)
+        output = self.outputs[-1][0]
+
+        detections, counts = self.postprocess(output, self.model_input_size, width, height)
         return {
             'detections': detections,
             'image_width': width,
