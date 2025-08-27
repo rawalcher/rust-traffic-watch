@@ -1,4 +1,4 @@
-use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_FPS};
+use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_SEND_FPS};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -105,7 +105,7 @@ impl ExperimentConfig {
             model_name,
             mode,
             duration_seconds: DEFAULT_DURATION_SECONDS,
-            fixed_fps: DEFAULT_FPS,
+            fixed_fps: DEFAULT_SEND_FPS as f32,
         }
     }
 }

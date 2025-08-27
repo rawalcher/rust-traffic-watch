@@ -9,7 +9,10 @@ pub const PI_ADDRESS: &str = "10.0.0.25";
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
 pub const DEFAULT_DURATION_SECONDS: u64 = 600;
-pub const DEFAULT_FPS: f32 = 1.0;
+
+// at 24 fps or higher rust starts to behave weirdly
+pub const DEFAULT_SEND_FPS: f32 = 1.0;
+pub const SOURCE_FPS: f32 = 30.0;
 
 pub const MAX_FRAME_SEQUENCE: u64 = 30000;
 pub const FRAME_WIDTH: u32 = 1920;
@@ -35,5 +38,7 @@ pub fn jetson_bind_address() -> String {
     format!("0.0.0.0:{}", JETSON_PORT)
 }
 
-
-
+pub fn get_frame_skip() -> Result<u64, &'static str> {
+    let skip = (SOURCE_FPS / DEFAULT_SEND_FPS).ceil() as u64;
+    Ok(skip.max(1))
+}
