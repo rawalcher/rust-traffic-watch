@@ -224,8 +224,8 @@ async fn handle_frame(
     )?;
 
     info!(
-        "Jetson inference complete for sequence_id: {}, detections: {}, size: {}x{}",
-        frame.sequence_id, inference.detection_count, inference.image_width, inference.image_height
+        "Jetson inference complete for sequence_id: {}, detections: {}",
+        frame.sequence_id, inference.detection_count
     );
 
     frame.timing.jetson_sent_result = Some(current_timestamp_micros());
