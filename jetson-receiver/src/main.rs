@@ -7,27 +7,29 @@ use shared::{
 };
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 
 use shared::connection::{wait_for_pi_on_jetson, Role};
 use shared::network::{read_message, spawn_writer};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    env_logger::init();
-    info!("Jetson connecting to controller at {}", controller_address());
-
-    let controller_stream = TcpStream::connect(controller_address()).await?;
-    let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
-
-    let ctrl_tx = spawn_writer(ctrl_writer);
-
-    ctrl_tx.send(Message::Hello(DeviceId::Jetson)).await.ok();
-
-    let config = wait_for_experiment_config(&mut ctrl_reader).await?;
+async fn run_experiment_cycle(
+    ctrl_reader: &mut OwnedReadHalf,
+    ctrl_tx: mpsc::Sender<Message>,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    let config = match wait_for_experiment_config(ctrl_reader).await {
+        Ok(c) => c,
+        Err(e) => {
+            if e.to_string().contains("Shutdown during") {
+                return Ok(false); // Clean shutdown
+            }
+            return Err(e);
+        }
+    };
 
     let pending_frame: Arc<Mutex<Option<FrameMessage>>> = Arc::new(Mutex::new(None));
     let pending_frame_network = Arc::clone(&pending_frame);
@@ -72,17 +74,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .await
         .ok();
 
-    wait_for_experiment_start(&mut ctrl_reader).await?;
+    wait_for_experiment_start(ctrl_reader).await?;
     info!("Experiment started. Processing frames...");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
     let inference_config = config.clone();
-    let pending_frame_for_inference = Arc::clone(&pending_frame_inference);
 
     let inference_task = tokio::spawn(async move {
         loop {
             let frame = {
-                let mut pending = pending_frame_for_inference.lock().await;
+                let mut pending = pending_frame_inference.lock().await;
                 pending.take()
             };
             if let Some(frame_msg) = frame {
@@ -118,10 +119,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     break;
                 }
             }
-            msg = read_message(&mut ctrl_reader) => {
+            msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received");
+                        info!("Experiment cycle complete, resetting for next experiment");
                         inference_task.abort();
                         break;
                     }
@@ -133,8 +134,48 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     }
 
-    info!("Jetson done. Exiting.");
-    Ok(())
+    Ok(true)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    env_logger::init();
+
+    loop {
+        info!("Jetson connecting to controller at {}", controller_address());
+
+        match TcpStream::connect(controller_address()).await {
+            Ok(controller_stream) => {
+                let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
+                let ctrl_tx = spawn_writer(ctrl_writer);
+
+                ctrl_tx.send(Message::Hello(DeviceId::Jetson)).await.ok();
+
+                // Keep running experiments until connection fails
+                loop {
+                    match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
+                        Ok(true) => {
+                            info!("Ready for next experiment");
+                            continue;
+                        }
+                        Ok(false) => {
+                            info!("Clean shutdown received");
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Experiment cycle error: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to connect to controller: {}. Retrying in 5 seconds...", e);
+            }
+        }
+
+        sleep(Duration::from_secs(10)).await;
+    }
 }
 
 async fn wait_for_experiment_config(

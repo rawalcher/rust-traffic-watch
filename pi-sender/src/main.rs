@@ -15,21 +15,19 @@ use tokio::time::sleep;
 
 use shared::network::{read_message, spawn_writer};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    env_logger::init();
-    info!("Connecting to controller at {}", controller_address());
-
-    let controller_stream = TcpStream::connect(controller_address()).await?;
-    let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
-    let ctrl_tx = spawn_writer(ctrl_writer);
-
-    ctrl_tx
-        .send(Message::Hello(shared::types::DeviceId::Pi))
-        .await
-        .ok();
-
-    let config = wait_for_experiment_config(&mut ctrl_reader).await?;
+async fn run_experiment_cycle(
+    ctrl_reader: &mut OwnedReadHalf,
+    ctrl_tx: mpsc::Sender<Message>,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    let config = match wait_for_experiment_config(ctrl_reader).await {
+        Ok(c) => c,
+        Err(e) => {
+            if e.to_string().contains("Shutdown before experiment") {
+                return Ok(false); // Clean shutdown, exit main loop
+            }
+            return Err(e);
+        }
+    };
 
     match config.mode {
         ExperimentMode::LocalOnly => {
@@ -44,7 +42,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .send(Message::Control(ControlMessage::ReadyToStart))
                 .await
                 .ok();
-            wait_for_experiment_start(&mut ctrl_reader).await?;
+            wait_for_experiment_start(ctrl_reader).await?;
             info!("Experiment started. Processing frames locally...");
 
             let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
@@ -94,7 +92,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             break;
                         }
                     }
-                    msg = read_message(&mut ctrl_reader) => {
+                    msg = read_message(ctrl_reader) => {
                         match msg? {
                             Message::Pulse(mut timing) => {
                                 timing.pi_capture_start = Some(current_timestamp_micros());
@@ -129,7 +127,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                 }
                             }
                             Message::Control(ControlMessage::Shutdown) => {
-                                info!("Shutdown received");
+                                info!("Experiment cycle complete, resetting for next experiment");
                                 inference_task.abort();
                                 break;
                             }
@@ -157,12 +155,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .send(Message::Control(ControlMessage::ReadyToStart))
                 .await
                 .ok();
-            wait_for_experiment_start(&mut ctrl_reader).await?;
+            wait_for_experiment_start(ctrl_reader).await?;
 
             info!("Experiment started. Forwarding frames to Jetson...");
 
             loop {
-                match read_message(&mut ctrl_reader).await? {
+                match read_message(ctrl_reader).await? {
                     Message::Pulse(mut timing) => {
                         timing.pi_capture_start = Some(current_timestamp_micros());
                         let frame = handle_pulse_offload(timing).await?;
@@ -172,7 +170,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         }
                     }
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received");
+                        info!("Experiment cycle complete, resetting for next experiment");
                         break;
                     }
                     msg => warn!("Unexpected message during experiment: {:?}", msg),
@@ -181,8 +179,51 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     }
 
-    info!("Experiment done. Exiting.");
-    Ok(())
+    Ok(true)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    env_logger::init();
+
+    loop {
+        info!("Connecting to controller at {}", controller_address());
+
+        match TcpStream::connect(controller_address()).await {
+            Ok(controller_stream) => {
+                let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
+                let ctrl_tx = spawn_writer(ctrl_writer);
+
+                ctrl_tx
+                    .send(Message::Hello(shared::types::DeviceId::Pi))
+                    .await
+                    .ok();
+
+                // Keep running experiments until connection fails
+                loop {
+                    match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
+                        Ok(true) => {
+                            info!("Ready for next experiment");
+                            continue;
+                        }
+                        Ok(false) => {
+                            info!("Clean shutdown received");
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Experiment cycle error: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to connect to controller: {}. Retrying in 5 seconds...", e);
+            }
+        }
+
+        sleep(Duration::from_secs(10)).await;
+    }
 }
 
 async fn wait_for_experiment_config(
