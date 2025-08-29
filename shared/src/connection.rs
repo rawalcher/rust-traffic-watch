@@ -150,7 +150,7 @@ pub async fn wait_for_devices(expected: &[DeviceId]) {
             }
         }
 
-        sleep(Duration::from_millis(2500));
+        tokio::time::sleep(Duration::from_millis(2500)).await;
     }
     info!("All devices connected")
 }
@@ -171,4 +171,8 @@ pub async fn wait_for_device_readiness(expected: &[DeviceId]) {
 
         tokio::time::sleep(Duration::from_millis(2500)).await;
     }
+}
+
+pub async fn clear_ready_devices() {
+    READY_DEVICES.lock().await.clear();
 }

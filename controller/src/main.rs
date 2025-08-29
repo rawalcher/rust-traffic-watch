@@ -14,6 +14,8 @@ use shared::DeviceId::Pi;
 pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Starting experiment: {}", config.experiment_id);
 
+    shared::connection::clear_ready_devices().await;
+
     let (inference_tx, mut inference_rx) = mpsc::unbounded_channel::<InferenceMessage>();
     let results: Arc<Mutex<Vec<InferenceMessage>>> = Arc::new(Mutex::new(Vec::new()));
     let results_clone = Arc::clone(&results);
