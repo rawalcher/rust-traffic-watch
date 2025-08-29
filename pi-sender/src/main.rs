@@ -1,14 +1,19 @@
 use log::{debug, error, info, warn};
 use shared::constants::*;
-use shared::{current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, ExperimentConfig, ExperimentMode, FrameMessage, InferenceMessage, Message, PersistentPythonDetector, TimingMetadata};
+use shared::{
+    current_timestamp_micros, perform_python_inference_with_counts,
+    ControlMessage, ExperimentConfig, ExperimentMode, FrameMessage, InferenceMessage,
+    Message, PersistentPythonDetector, TimingMetadata,
+};
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::tcp::OwnedReadHalf;
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tokio::net::{TcpStream};
-use tokio::net::tcp::{OwnedReadHalf};
 use tokio::time::sleep;
-use shared::network::{send_message, read_message};
+
+use shared::network::{read_message, spawn_writer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -16,9 +21,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Connecting to controller at {}", controller_address());
 
     let controller_stream = TcpStream::connect(controller_address()).await?;
-    let (mut ctrl_reader, mut ctrl_writer) = controller_stream.into_split();
+    let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
+    let ctrl_tx = spawn_writer(ctrl_writer);
 
-    send_message(&mut ctrl_writer, &Message::Hello(shared::types::DeviceId::Pi)).await?;
+    ctrl_tx
+        .send(Message::Hello(shared::types::DeviceId::Pi))
+        .await
+        .ok();
 
     let config = wait_for_experiment_config(&mut ctrl_reader).await?;
 
@@ -31,7 +40,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 INFERENCE_PYTORCH_PATH.to_string(),
             )?;
 
-            send_message(&mut ctrl_writer, &Message::Control(ControlMessage::ReadyToStart)).await?;
+            ctrl_tx
+                .send(Message::Control(ControlMessage::ReadyToStart))
+                .await
+                .ok();
             wait_for_experiment_start(&mut ctrl_reader).await?;
             info!("Experiment started. Processing frames locally...");
 
@@ -39,6 +51,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
             let pending_frame_inference = Arc::clone(&pending_frame);
             let inference_config = config.clone();
+            let ctrl_tx2 = ctrl_tx.clone();
 
             let inference_task = tokio::spawn(async move {
                 loop {
@@ -48,7 +61,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     };
 
                     if let Some(frame_msg) = frame {
-                        info!("Pi: Starting local inference for sequence_id={}", frame_msg.sequence_id);
+                        info!(
+                            "Pi: Starting local inference for sequence_id={}",
+                            frame_msg.sequence_id
+                        );
 
                         match handle_frame_local(frame_msg, &mut detector, &inference_config).await {
                             Ok(result) => {
@@ -67,13 +83,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
                     }
                 }
-                detector.shutdown()
+                let _ = detector.shutdown();
             });
 
             loop {
                 tokio::select! {
                     Some(result) = result_rx.recv() => {
-                        send_message(&mut ctrl_writer, &Message::Result(result)).await?;
+                        if ctrl_tx2.send(Message::Result(result)).await.is_err() {
+                            error!("Controller writer channel closed");
+                            break;
+                        }
                     }
                     msg = read_message(&mut ctrl_reader) => {
                         match msg? {
@@ -120,15 +139,24 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
             }
         }
+
         ExperimentMode::Offload => {
             info!("Connecting to Jetson on {}", jetson_address());
             sleep(Duration::from_millis(7500)).await;
 
             let jetson_stream = TcpStream::connect(jetson_address()).await?;
-            let (_, mut jetson_writer) = jetson_stream.into_split();
-            send_message(&mut jetson_writer, &Message::Hello(shared::types::DeviceId::Pi)).await?;
+            let (_jetson_reader, jetson_writer) = jetson_stream.into_split();
+            let jetson_tx = spawn_writer(jetson_writer);
 
-            send_message(&mut ctrl_writer, &Message::Control(ControlMessage::ReadyToStart)).await?;
+            jetson_tx
+                .send(Message::Hello(shared::types::DeviceId::Pi))
+                .await
+                .ok();
+
+            ctrl_tx
+                .send(Message::Control(ControlMessage::ReadyToStart))
+                .await
+                .ok();
             wait_for_experiment_start(&mut ctrl_reader).await?;
 
             info!("Experiment started. Forwarding frames to Jetson...");
@@ -138,7 +166,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     Message::Pulse(mut timing) => {
                         timing.pi_capture_start = Some(current_timestamp_micros());
                         let frame = handle_pulse_offload(timing).await?;
-                        send_message(&mut jetson_writer, &Message::Frame(frame)).await?;
+                        if jetson_tx.send(Message::Frame(frame)).await.is_err() {
+                            error!("Jetson writer channel closed");
+                            break;
+                        }
                     }
                     Message::Control(ControlMessage::Shutdown) => {
                         info!("Shutdown received");
@@ -154,7 +185,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-async fn wait_for_experiment_config(reader: &mut OwnedReadHalf) -> Result<ExperimentConfig, Box<dyn Error + Send + Sync>> {
+async fn wait_for_experiment_config(
+    reader: &mut OwnedReadHalf,
+) -> Result<ExperimentConfig, Box<dyn Error + Send + Sync>> {
     loop {
         match read_message(reader).await? {
             Message::Control(ControlMessage::StartExperiment { config }) => {
@@ -169,7 +202,9 @@ async fn wait_for_experiment_config(reader: &mut OwnedReadHalf) -> Result<Experi
     }
 }
 
-async fn wait_for_experiment_start(reader: &mut OwnedReadHalf) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn wait_for_experiment_start(
+    reader: &mut OwnedReadHalf,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         match read_message(reader).await? {
             Message::Control(ControlMessage::BeginExperiment) => return Ok(()),
@@ -184,8 +219,12 @@ async fn handle_frame_local(
     detector: &mut PersistentPythonDetector,
     config: &ExperimentConfig,
 ) -> Result<InferenceMessage, Box<dyn Error + Send + Sync>> {
-    let inference = perform_python_inference_with_counts(&frame,
-                                                         detector, &config.model_name, "local")?;
+    let inference = perform_python_inference_with_counts(
+        &frame,
+        detector,
+        &config.model_name,
+        "local",
+    )?;
 
     Ok(InferenceMessage {
         sequence_id: frame.sequence_id,
