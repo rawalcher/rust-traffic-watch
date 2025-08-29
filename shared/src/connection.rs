@@ -100,7 +100,7 @@ pub async fn handle_device_connection(mut stream: TcpStream, role: Role) -> anyh
                         }
                         (Role::Controller { .. }, Message::Control(ControlMessage::ReadyToStart)) => {
                             mark_device_ready(device_id).await;
-                            log::info!("{:?} is now ready", device_id);
+                            info!("{:?} is now ready", device_id);
                         }
                         (Role::Jetson { frame_handler }, Message::Frame(frame)) => {
                             let _ = frame_handler.send(frame);
@@ -159,7 +159,7 @@ pub async fn wait_for_device_readiness(expected: &[DeviceId]) {
         let mut all_ready = true;
         for id in expected {
             if !is_device_ready(id).await {
-                log::info!("Waiting for {:?} to be ready...", id);
+                info!("Waiting for {:?} to be ready...", id);
                 all_ready = false;
             }
         }

@@ -105,7 +105,7 @@ impl ExperimentConfig {
             model_name,
             mode,
             duration_seconds: DEFAULT_DURATION_SECONDS,
-            fixed_fps: DEFAULT_SEND_FPS as f32,
+            fixed_fps: DEFAULT_SEND_FPS,
         }
     }
 }

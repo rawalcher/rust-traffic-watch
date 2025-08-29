@@ -78,7 +78,7 @@ async fn run_experiment_cycle(
                             }
                         }
                     } else {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                        tokio::time::sleep(Duration::from_millis(1)).await;
                     }
                 }
                 let _ = detector.shutdown();
@@ -140,7 +140,7 @@ async fn run_experiment_cycle(
 
         ExperimentMode::Offload => {
             info!("Connecting to Jetson on {}", jetson_address());
-            sleep(Duration::from_millis(7500)).await;
+            sleep(Duration::from_secs(2)).await;
 
             let jetson_stream = TcpStream::connect(jetson_address()).await?;
             let (_jetson_reader, jetson_writer) = jetson_stream.into_split();

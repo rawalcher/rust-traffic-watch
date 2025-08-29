@@ -38,7 +38,7 @@ async fn run_experiment_cycle(
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel();
 
     debug!("Starting Pi connection handler...");
-    tokio::spawn(async move {
+    let pi_handler = tokio::spawn(async move {
         if let Err(e) = wait_for_pi_on_jetson(Role::Jetson { frame_handler: frame_tx }).await {
             error!("Pi connection handler failed: {:?}", e);
         }
@@ -105,7 +105,7 @@ async fn run_experiment_cycle(
                     }
                 }
             } else {
-                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         }
         let _ = detector.shutdown();
@@ -124,6 +124,7 @@ async fn run_experiment_cycle(
                     Message::Control(ControlMessage::Shutdown) => {
                         info!("Experiment cycle complete, resetting for next experiment");
                         inference_task.abort();
+                        pi_handler.abort();
                         break;
                     }
                     unexpected => {
@@ -133,6 +134,7 @@ async fn run_experiment_cycle(
             }
         }
     }
+    sleep(Duration::from_millis(500)).await;
 
     Ok(true)
 }
@@ -156,6 +158,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
                         Ok(true) => {
                             info!("Ready for next experiment");
+                            // Add small delay between experiments to ensure cleanup
+                            sleep(Duration::from_secs(2)).await;
                             continue;
                         }
                         Ok(false) => {
@@ -178,6 +182,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 }
 
+// Keep all your existing helper functions unchanged
 async fn wait_for_experiment_config(
     reader: &mut OwnedReadHalf,
 ) -> Result<ExperimentConfig, Box<dyn Error + Send + Sync>> {
