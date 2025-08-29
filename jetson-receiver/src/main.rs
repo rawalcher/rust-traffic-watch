@@ -125,7 +125,7 @@ async fn run_experiment_cycle(
                     Err(e) => error!("Failed to process frame: {}", e),
                 }
             } else {
-                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                sleep(Duration::from_millis(1)).await;
             }
         }
         let _ = detector.shutdown();

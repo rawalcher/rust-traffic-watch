@@ -1,10 +1,13 @@
-use std::sync::{Arc, Mutex};
+// src/main.rs
+
 use std::{env, error::Error};
 
 use csv::Writer;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{info, warn};
+
+use std::sync::Arc;
 
 use shared::connection::{
     get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role,
@@ -12,157 +15,189 @@ use shared::connection::{
 use shared::constants::*;
 use shared::current_timestamp_micros;
 use shared::types::*;
-use shared::DeviceId::Pi;
+use shared::DeviceId::{self, Pi};
 
-pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Starting experiment: {}", config.experiment_id);
+struct ControllerHarness {
+    active_sink_tx: watch::Sender<Option<mpsc::UnboundedSender<InferenceMessage>>>,
+    _forwarder_task: tokio::task::JoinHandle<()>,
+    _listener_task: tokio::task::JoinHandle<()>,
+}
 
-    shared::connection::clear_ready_devices().await;
+impl ControllerHarness {
+    async fn new() -> Self {
+        let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
-    let (inference_tx, mut inference_rx) = mpsc::unbounded_channel::<InferenceMessage>();
-    let results: Arc<Mutex<Vec<InferenceMessage>>> = Arc::new(Mutex::new(Vec::new()));
-    let results_clone = Arc::clone(&results);
+        let listener_task = tokio::spawn(async move {
+            if let Err(e) = start_controller_listener(Role::Controller {
+                result_handler: raw_tx,
+            })
+            .await
+            {
+                warn!("controller listener exited with error: {:?}", e);
+            }
+        });
 
-    let (stop_tx, mut stop_rx) = watch::channel(false);
+        let (active_sink_tx, active_sink_rx) =
+            watch::channel::<Option<mpsc::UnboundedSender<InferenceMessage>>>(None);
 
-    let result_collection_task = tokio::spawn(async move {
-        let mut count = 0usize;
-        loop {
-            tokio::select! {
-                _ = stop_rx.changed() => {
-                    if *stop_rx.borrow() { break; }
+        let forwarder_task = tokio::spawn(async move {
+            let sink_rx = active_sink_rx;
+            while let Some(msg) = raw_rx.recv().await {
+                if let Some(sink) = sink_rx.borrow().clone() {
+                    let _ = sink.send(msg);
                 }
-                maybe = inference_rx.recv() => {
-                    match maybe {
-                        Some(mut result) => {
-                            result.timing.controller_received = Some(current_timestamp_micros());
-                            count += 1;
-                            info!("Controller received result {} for sequence_id: {}", count, result.sequence_id);
-                            results_clone.lock().unwrap().push(result);
+            }
+        });
+
+        Self {
+            active_sink_tx,
+            _forwarder_task: forwarder_task,
+            _listener_task: listener_task,
+        }
+    }
+
+    async fn run_controller(
+        &self,
+        config: ExperimentConfig,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        info!("Starting experiment: {}", config.experiment_id);
+
+        shared::connection::clear_ready_devices().await;
+
+        let (inference_tx, mut inference_rx) = mpsc::unbounded_channel::<InferenceMessage>();
+        let results: Arc<Mutex<Vec<InferenceMessage>>> = Arc::new(Mutex::new(Vec::new()));
+        let results_clone = Arc::clone(&results);
+
+        let _ = self.active_sink_tx.send(Some(inference_tx.clone()));
+
+        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let result_collection_task = tokio::spawn(async move {
+            let mut count = 0usize;
+            loop {
+                tokio::select! {
+                    _ = stop_rx.changed() => {
+                        if *stop_rx.borrow() { break; }
+                    }
+                    maybe = inference_rx.recv() => {
+                        match maybe {
+                            Some(mut result) => {
+                                result.timing.controller_received = Some(current_timestamp_micros());
+                                count += 1;
+                                info!("Controller received result {} for sequence_id: {}", count, result.sequence_id);
+                                results_clone.lock().await.push(result);
+                            }
+                            None => break, // sender dropped
                         }
-                        None => break, // all senders dropped
                     }
                 }
             }
-        }
-        while let Ok(mut result) = inference_rx.try_recv() {
-            result.timing.controller_received = Some(current_timestamp_micros());
-            count += 1;
-            info!(
-                "(drain) Controller received result {} seq={}",
-                count, result.sequence_id
-            );
-            results_clone.lock().unwrap().push(result);
-        }
-        info!("Result collection task finished with {} results", count);
-    });
+            info!("Result collection task finished with {} results", count);
+        });
 
-    let controller_listener_task = tokio::spawn(start_controller_listener(Role::Controller {
-        result_handler: inference_tx.clone(),
-    }));
+        let controller_listener_task_note = "listener runs globally; not per-run";
 
-    let required_devices = match config.mode {
-        ExperimentMode::LocalOnly => vec![Pi],
-        ExperimentMode::Offload => vec![Pi, DeviceId::Jetson],
-    };
+        let required_devices = match config.mode {
+            ExperimentMode::LocalOnly => vec![Pi],
+            ExperimentMode::Offload => vec![Pi, DeviceId::Jetson],
+        };
 
-    wait_for_devices(&required_devices).await;
+        wait_for_devices(&required_devices).await;
 
-    let msg = Message::Control(ControlMessage::StartExperiment {
-        config: config.clone(),
-    });
-    for id in &required_devices {
-        if let Some(sender) = get_device_sender(id).await {
-            sender.send(msg.clone())?;
-        }
-    }
-
-    wait_for_device_readiness(&required_devices).await;
-
-    let begin_msg = Message::Control(ControlMessage::BeginExperiment);
-    for id in &required_devices {
-        if let Some(sender) = get_device_sender(id).await {
-            sender.send(begin_msg.clone())?;
-        }
-    }
-
-    let start = Instant::now();
-    let mut sequence_id: u64 = 0;
-    let mut frame_number: u64 = 1;
-    let pulse_interval = Duration::from_millis((1000.0 / config.fixed_fps) as u64);
-    let mut expected_results = 0u64;
-
-    while start.elapsed().as_secs() < config.duration_seconds {
-        if let Some(sender) = get_device_sender(&Pi).await {
-            let mut timing = TimingMetadata::default();
-            timing.sequence_id = sequence_id;
-            timing.controller_sent_pulse = Some(current_timestamp_micros());
-            timing.frame_number = frame_number;
-
-            sender.send(Message::Pulse(timing))?;
-            info!("Sent pulse {} to Pi", sequence_id);
-
-            sequence_id += 1;
-            frame_number = (frame_number + 30 - 1) % MAX_FRAME_SEQUENCE + 1;
-            expected_results += 1;
-        }
-        sleep(pulse_interval).await;
-    }
-
-    info!(
-        "Finished sending {} pulses. Waiting 5 seconds for results...",
-        expected_results
-    );
-    sleep(Duration::from_secs(5)).await;
-
-    let final_count_now = results.lock().unwrap().len();
-    info!(
-        "Collected {} results out of {} pulses sent ({:.1}% success rate)",
-        final_count_now,
-        expected_results,
-        (final_count_now as f32 / expected_results as f32) * 100.0
-    );
-
-    let shutdown = Message::Control(ControlMessage::Shutdown);
-    for id in &required_devices {
-        if let Some(sender) = get_device_sender(id).await {
-            let _ = sender.send(shutdown.clone());
-        }
-    }
-
-    controller_listener_task.abort();
-    let _ = controller_listener_task.await;
-
-    let _ = stop_tx.send(true);
-
-    drop(inference_tx);
-
-    match timeout(Duration::from_secs(2), result_collection_task).await {
-        Ok(joined) => {
-            if let Err(e) = joined {
-                warn!("Result collection task error: {:?}", e);
+        let msg = Message::Control(ControlMessage::StartExperiment {
+            config: config.clone(),
+        });
+        for id in &required_devices {
+            if let Some(sender) = get_device_sender(id).await {
+                sender.send(msg.clone())?;
             }
         }
-        Err(_) => {
-            warn!("Result collector did not stop in time; aborting.");
+
+        wait_for_device_readiness(&required_devices).await;
+
+        let begin_msg = Message::Control(ControlMessage::BeginExperiment);
+        for id in &required_devices {
+            if let Some(sender) = get_device_sender(id).await {
+                sender.send(begin_msg.clone())?;
+            }
         }
+
+        let start = Instant::now();
+        let mut sequence_id: u64 = 0;
+        let mut frame_number: u64 = 1;
+        let pulse_interval = Duration::from_millis((1000.0 / config.fixed_fps) as u64);
+        let mut expected_results = 0u64;
+
+        while start.elapsed().as_secs() < config.duration_seconds {
+            if let Some(sender) = get_device_sender(&Pi).await {
+                let mut timing = TimingMetadata::default();
+                timing.sequence_id = sequence_id;
+                timing.controller_sent_pulse = Some(current_timestamp_micros());
+                timing.frame_number = frame_number;
+
+                sender.send(Message::Pulse(timing))?;
+                info!("Sent pulse {} to Pi", sequence_id);
+
+                sequence_id += 1;
+                frame_number = (frame_number + 30 - 1) % MAX_FRAME_SEQUENCE + 1;
+                expected_results += 1;
+            }
+            sleep(pulse_interval).await;
+        }
+
+        info!(
+            "Finished sending {} pulses. Waiting 5 seconds for results...",
+            expected_results
+        );
+        sleep(Duration::from_secs(5)).await;
+
+        let final_count_now = results.lock().await.len();
+        info!(
+            "Collected {} results out of {} pulses sent ({:.1}% success rate)",
+            final_count_now,
+            expected_results,
+            (final_count_now as f32 / expected_results as f32) * 100.0
+        );
+
+        let shutdown = Message::Control(ControlMessage::Shutdown);
+        for id in &required_devices {
+            if let Some(sender) = get_device_sender(id).await {
+                let _ = sender.send(shutdown.clone());
+            }
+        }
+
+        let _ = stop_tx.send(true);
+
+        let _ = self.active_sink_tx.send(None);
+
+        drop(inference_tx);
+
+        match timeout(Duration::from_secs(2), result_collection_task).await {
+            Ok(joined) => {
+                if let Err(e) = joined {
+                    warn!("Result collection task error: {:?}", e);
+                }
+            }
+            Err(_) => {
+                warn!("Result collector did not stop in time; it will end soon.");
+            }
+        }
+
+        info!("Shutdown complete ({})", controller_listener_task_note);
+
+        let locked_results = results.lock().await;
+        let final_count = locked_results.len();
+        info!(
+            "Generating CSV with {} results for experiment {}",
+            final_count, config.experiment_id
+        );
+
+        generate_analysis_csv(&locked_results, &config.experiment_id, &config)?;
+        info!(
+            "Experiment {} completed with {} results saved",
+            config.experiment_id, final_count
+        );
+        Ok(())
     }
-
-    info!("Shutdown complete");
-
-    let locked_results = results.lock().unwrap();
-    let final_count = locked_results.len();
-    info!(
-        "Generating CSV with {} results for experiment {}",
-        final_count, config.experiment_id
-    );
-
-    generate_analysis_csv(&locked_results, &config.experiment_id, &config)?;
-    info!(
-        "Experiment {} completed with {} results saved",
-        config.experiment_id, final_count
-    );
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -236,7 +271,10 @@ impl TestConfig {
     }
 }
 
-async fn run_single_experiment(args: &[String]) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn run_single_experiment(
+    args: &[String],
+    harness: &ControllerHarness,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let model_name = args
         .iter()
         .find(|arg| arg.starts_with("--model="))
@@ -261,13 +299,16 @@ async fn run_single_experiment(args: &[String]) -> Result<(), Box<dyn Error + Se
         config.fixed_fps = fps;
 
         info!("Starting single experiment: {}", experiment_id);
-        run_controller(config).await?;
+        harness.run_controller(config).await?;
         sleep(Duration::from_secs(2)).await;
     }
     Ok(())
 }
 
-async fn run_test_suite(test_config: TestConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn run_test_suite(
+    test_config: TestConfig,
+    harness: &ControllerHarness,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("=================================================");
     info!("Starting automated test suite");
     info!("Models: {:?}", test_config.models);
@@ -289,7 +330,7 @@ async fn run_test_suite(test_config: TestConfig) -> Result<(), Box<dyn Error + S
             for mode in &test_config.modes {
                 current += 1;
 
-                info!("\n=================================================");
+                info!("=================================================");
                 info!(
                     "Experiment {}/{}: Model={}, FPS={}, Mode={:?}",
                     current, total, model, fps, mode
@@ -302,23 +343,22 @@ async fn run_test_suite(test_config: TestConfig) -> Result<(), Box<dyn Error + S
                 config.fixed_fps = *fps;
                 config.duration_seconds = test_config.duration_seconds;
 
-                match run_controller(config).await {
+                match harness.run_controller(config).await {
                     Ok(_) => info!("✓ Experiment {} completed", experiment_id),
                     Err(e) => {
                         eprintln!("✗ Experiment {} failed: {}", experiment_id, e);
-                        // Continue with next experiment
                     }
                 }
 
                 if current < total {
                     info!("Waiting 15 seconds before next experiment...");
-                    sleep(Duration::from_secs(15)).await; // Increased for cleanup
+                    sleep(Duration::from_secs(15)).await; // extra cleanup time
                 }
             }
         }
     }
 
-    info!("\n=================================================");
+    info!("=================================================");
     info!("All experiments completed! Results in logs/");
     info!("=================================================");
     Ok(())
@@ -329,11 +369,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
     let args: Vec<String> = env::args().collect();
 
+    let harness = ControllerHarness::new().await;
+
     if args.iter().any(|a| a.starts_with("--model=")) {
-        run_single_experiment(&args).await
+        run_single_experiment(&args, &harness).await
     } else {
         let test_config = TestConfig::parse_args(&args);
-        run_test_suite(test_config).await
+        run_test_suite(test_config, &harness).await
     }
 }
 
