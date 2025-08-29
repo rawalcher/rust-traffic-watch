@@ -130,8 +130,6 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
         }
     }
 
-    shared::connection::wait_for_disconnections(&required_devices).await;
-
     controller_listener_task.abort();
     let _ = controller_listener_task.await;
 

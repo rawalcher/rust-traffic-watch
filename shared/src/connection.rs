@@ -135,18 +135,6 @@ pub async fn handle_device_connection(mut stream: TcpStream, role: Role) -> anyh
     Ok(())
 }
 
-pub async fn wait_for_disconnections(expected: &[DeviceId]) {
-    loop {
-        let map = DEVICES.lock().await;
-        if expected.iter().all(|id| !map.contains_key(id)) {
-            break;
-        }
-        drop(map);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    info!("All expected devices disconnected");
-}
-
 pub async fn get_device_sender(id: &DeviceId) -> Option<DeviceSender> {
     DEVICES.lock().await.get(id).cloned()
 }
