@@ -1,21 +1,19 @@
 use log::{debug, error, info, warn};
 use shared::constants::*;
 use shared::{
-    current_timestamp_micros, perform_python_inference_with_counts,
-    ControlMessage, DeviceId, ExperimentConfig, FrameMessage,
-    InferenceMessage, Message, PersistentPythonDetector,
+    current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, DeviceId,
+    ExperimentConfig, FrameMessage, InferenceMessage, Message, PersistentPythonDetector,
 };
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 
-use shared::connection::{wait_for_pi_on_jetson, Role};
-use shared::network::{read_message, spawn_writer};
+use shared::network::{read_message, read_message_stream, spawn_writer};
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -25,7 +23,7 @@ async fn run_experiment_cycle(
         Ok(c) => c,
         Err(e) => {
             if e.to_string().contains("Shutdown during") {
-                return Ok(false); // Clean shutdown
+                return Ok(false);
             }
             return Err(e);
         }
@@ -37,10 +35,39 @@ async fn run_experiment_cycle(
 
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel();
 
-    debug!("Starting Pi connection handler...");
+    info!("Waiting for Pi to connect on {}...", jetson_bind_address());
+    let listener = TcpListener::bind(jetson_bind_address()).await?;
+
+    let (mut pi_stream, pi_addr) = listener.accept().await?;
+    info!("Pi connected from {}", pi_addr);
+
+    drop(listener);
+    info!("Listener dropped, port freed");
+
+    let hello = read_message_stream(&mut pi_stream).await?;
+    match hello {
+        Message::Hello(DeviceId::Pi) => info!("Pi hello received"),
+        other => warn!("Unexpected hello from Pi: {:?}", other),
+    }
+
+    let (mut pi_reader, _pi_writer) = pi_stream.into_split();
+
     let pi_handler = tokio::spawn(async move {
-        if let Err(e) = wait_for_pi_on_jetson(Role::Jetson { frame_handler: frame_tx }).await {
-            error!("Pi connection handler failed: {:?}", e);
+        loop {
+            match read_message(&mut pi_reader).await {
+                Ok(Message::Frame(frame)) => {
+                    let seq_id = frame.sequence_id;
+                    info!("Jetson received frame from Pi: sequence_id={}", seq_id);
+                    if frame_tx.send(frame).is_err() {
+                        break;
+                    }
+                }
+                Ok(other) => debug!("Pi sent: {:?}", other),
+                Err(_) => {
+                    info!("Pi disconnected");
+                    break;
+                }
+            }
         }
     });
 
@@ -57,16 +84,12 @@ async fn run_experiment_cycle(
         }
     });
 
-    info!("Pi connection handler started, initializing detector...");
-
+    info!("Initializing detector...");
     let model_name = config.model_name.clone();
     let mut detector = tokio::task::spawn_blocking(move || {
-        PersistentPythonDetector::new(
-            model_name,
-            INFERENCE_TENSORRT_PATH.to_string(),
-        )
+        PersistentPythonDetector::new(model_name, INFERENCE_TENSORRT_PATH.to_string())
     })
-        .await??;
+    .await??;
 
     info!("Python detector ready, sending ReadyToStart");
     ctrl_tx
@@ -94,18 +117,15 @@ async fn run_experiment_cycle(
                 match handle_frame(frame_msg, &mut detector, &inference_config).await {
                     Ok(result) => {
                         let seq_id = result.sequence_id;
-                        if let Err(e) = result_tx.send(result) {
-                            error!("Failed to send result to channel: {}", e);
+                        if result_tx.send(result).is_err() {
                             break;
                         }
                         info!("Jetson: Completed inference for sequence_id={}", seq_id);
                     }
-                    Err(e) => {
-                        error!("Failed to process frame: {}", e);
-                    }
+                    Err(e) => error!("Failed to process frame: {}", e),
                 }
             } else {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
             }
         }
         let _ = detector.shutdown();
@@ -122,20 +142,18 @@ async fn run_experiment_cycle(
             msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Experiment cycle complete, resetting for next experiment");
+                        info!("Experiment cycle complete, shutting down tasks");
                         inference_task.abort();
                         pi_handler.abort();
                         break;
                     }
-                    unexpected => {
-                        warn!("Unexpected controller message: {:?}", unexpected);
-                    }
+                    unexpected => warn!("Unexpected controller message: {:?}", unexpected),
                 }
             }
         }
     }
-    sleep(Duration::from_millis(500)).await;
 
+    info!("Experiment complete");
     Ok(true)
 }
 
@@ -144,7 +162,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     env_logger::init();
 
     loop {
-        info!("Jetson connecting to controller at {}", controller_address());
+        info!(
+            "Jetson connecting to controller at {}",
+            controller_address()
+        );
 
         match TcpStream::connect(controller_address()).await {
             Ok(controller_stream) => {
@@ -153,13 +174,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
                 ctrl_tx.send(Message::Hello(DeviceId::Jetson)).await.ok();
 
-                // Keep running experiments until connection fails
                 loop {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
                         Ok(true) => {
                             info!("Ready for next experiment");
-                            // Add small delay between experiments to ensure cleanup
-                            sleep(Duration::from_secs(2)).await;
                             continue;
                         }
                         Ok(false) => {
@@ -174,7 +192,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
             }
             Err(e) => {
-                error!("Failed to connect to controller: {}. Retrying in 5 seconds...", e);
+                error!(
+                    "Failed to connect to controller: {}. Retrying in 10 seconds...",
+                    e
+                );
             }
         }
 
@@ -182,29 +203,32 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 }
 
-// Keep all your existing helper functions unchanged
 async fn wait_for_experiment_config(
     reader: &mut OwnedReadHalf,
 ) -> Result<ExperimentConfig, Box<dyn Error + Send + Sync>> {
-    wait_for_control_message(reader, |msg| {
-        if let ControlMessage::StartExperiment { config } = msg {
-            Some(config)
-        } else {
-            None
+    loop {
+        match read_message(reader).await? {
+            Message::Control(ControlMessage::StartExperiment { config }) => return Ok(config),
+            Message::Control(ControlMessage::Shutdown) => {
+                return Err("Shutdown during config wait".into());
+            }
+            msg => warn!("Waiting for config, got: {:?}", msg),
         }
-    }, "experiment config").await
+    }
 }
 
 async fn wait_for_experiment_start(
     reader: &mut OwnedReadHalf,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    wait_for_control_message(reader, |msg| {
-        if let ControlMessage::BeginExperiment = msg {
-            Some(())
-        } else {
-            None
+    loop {
+        match read_message(reader).await? {
+            Message::Control(ControlMessage::BeginExperiment) => return Ok(()),
+            Message::Control(ControlMessage::Shutdown) => {
+                return Err("Shutdown during start wait".into())
+            }
+            msg => warn!("Waiting for start, got: {:?}", msg),
         }
-    }, "experiment start").await
+    }
 }
 
 async fn handle_frame(
@@ -212,26 +236,10 @@ async fn handle_frame(
     detector: &mut PersistentPythonDetector,
     config: &ExperimentConfig,
 ) -> Result<InferenceMessage, Box<dyn Error + Send + Sync>> {
-
     frame.timing.jetson_received = Some(current_timestamp_micros());
 
-    debug!(
-        "Processing frame {} with {} bytes",
-        frame.sequence_id,
-        frame.frame_data.len()
-    );
-
-    let inference = perform_python_inference_with_counts(
-        &frame,
-        detector,
-        &config.model_name,
-        "offload",
-    )?;
-
-    info!(
-        "Jetson inference complete for sequence_id: {}, detections: {}",
-        frame.sequence_id, inference.detection_count
-    );
+    let inference =
+        perform_python_inference_with_counts(&frame, detector, &config.model_name, "offload")?;
 
     frame.timing.jetson_sent_result = Some(current_timestamp_micros());
 
@@ -240,34 +248,4 @@ async fn handle_frame(
         timing: frame.timing,
         inference,
     })
-}
-
-async fn wait_for_control_message<F, T>(
-    reader: &mut OwnedReadHalf,
-    matcher: F,
-    context: &str,
-) -> Result<T, Box<dyn Error + Send + Sync>>
-where
-    F: Fn(ControlMessage) -> Option<T>,
-{
-    loop {
-        match read_message(reader).await? {
-            Message::Control(ctrl_msg) => {
-                match ctrl_msg {
-                    ControlMessage::Shutdown => {
-                        return Err(format!("Shutdown during {}", context).into());
-                    }
-                    other => {
-                        if let Some(result) = matcher(other.clone()) {
-                            return Ok(result);
-                        }
-                        warn!("Unexpected control message while waiting for {}: {:?}", context, other);
-                    }
-                }
-            }
-            other => {
-                warn!("Expected Control message while waiting for {}, got: {:?}", context, other);
-            }
-        }
-    }
 }

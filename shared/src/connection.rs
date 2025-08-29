@@ -1,19 +1,20 @@
+use crate::constants::{controller_bind_address, jetson_bind_address};
+use crate::network::{read_message, send_message};
+use crate::types::{DeviceId, FrameMessage, InferenceMessage, Message};
+use crate::{read_message_stream, ControlMessage};
+use log::info;
+use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use log::info;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, mpsc};
-use once_cell::sync::Lazy;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, warn};
-use crate::constants::{controller_bind_address, jetson_bind_address};
-use crate::types::{Message, DeviceId, InferenceMessage, FrameMessage};
-use crate::network::{read_message, send_message};
-use crate::{read_message_stream, ControlMessage};
 
 pub type DeviceSender = mpsc::UnboundedSender<Message>;
 pub type DeviceReceiver = mpsc::UnboundedReceiver<Message>;
 
-static DEVICES: Lazy<Mutex<HashMap<DeviceId, DeviceSender>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static DEVICES: Lazy<Mutex<HashMap<DeviceId, DeviceSender>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static READY_DEVICES: Lazy<Mutex<HashSet<DeviceId>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Clone)]
@@ -62,8 +63,10 @@ pub async fn wait_for_pi_on_jetson(role: Role) -> tokio::io::Result<()> {
 }
 
 pub async fn handle_device_connection(mut stream: TcpStream, role: Role) -> anyhow::Result<()> {
-    let hello = read_message_stream(&mut stream).await.map_err(|e| anyhow::anyhow!(e))?;
-    
+    let hello = read_message_stream(&mut stream)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
     let device_id = match hello {
         Message::Hello(id) => id,
         other => {
@@ -86,6 +89,7 @@ pub async fn handle_device_connection(mut stream: TcpStream, role: Role) -> anyh
                 break;
             }
         }
+        debug!("{:?} write_task end", device_id);
     });
 
     let read_task = tokio::spawn(async move {
@@ -96,9 +100,17 @@ pub async fn handle_device_connection(mut stream: TcpStream, role: Role) -> anyh
 
                     match (&role, msg) {
                         (Role::Controller { result_handler }, Message::Result(result)) => {
-                            let _ = result_handler.send(result);
+                            if let Err(e) = result_handler.send(result) {
+                                warn!(
+                                    "Result drop: no active collector for {:?} (send err: {})",
+                                    device_id, e
+                                );
+                            }
                         }
-                        (Role::Controller { .. }, Message::Control(ControlMessage::ReadyToStart)) => {
+                        (
+                            Role::Controller { .. },
+                            Message::Control(ControlMessage::ReadyToStart),
+                        ) => {
                             mark_device_ready(device_id).await;
                             info!("{:?} is now ready", device_id);
                         }
@@ -114,12 +126,25 @@ pub async fn handle_device_connection(mut stream: TcpStream, role: Role) -> anyh
                 }
             }
         }
+        debug!("{:?} read_task end", device_id);
     });
-    
+
     let _ = tokio::try_join!(write_task, read_task);
     DEVICES.lock().await.remove(&device_id);
-    
+    debug!("Removed {:?} from DEVICES", device_id);
     Ok(())
+}
+
+pub async fn wait_for_disconnections(expected: &[DeviceId]) {
+    loop {
+        let map = DEVICES.lock().await;
+        if expected.iter().all(|id| !map.contains_key(id)) {
+            break;
+        }
+        drop(map);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    info!("All expected devices disconnected");
 }
 
 pub async fn get_device_sender(id: &DeviceId) -> Option<DeviceSender> {

@@ -1,14 +1,17 @@
-use std::{env, error::Error};
 use std::sync::{Arc, Mutex};
-use tokio::time::{sleep, Duration, Instant};
-use tracing::{info};
+use std::{env, error::Error};
 
 use csv::Writer;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+use tokio::time::{sleep, timeout, Duration, Instant};
+use tracing::{info, warn};
+
+use shared::connection::{
+    get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role,
+};
 use shared::constants::*;
-use shared::connection::{get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role};
-use shared::types::*;
 use shared::current_timestamp_micros;
+use shared::types::*;
 use shared::DeviceId::Pi;
 
 pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -20,16 +23,42 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
     let results: Arc<Mutex<Vec<InferenceMessage>>> = Arc::new(Mutex::new(Vec::new()));
     let results_clone = Arc::clone(&results);
 
-    tokio::spawn(async move {
-        while let Some(mut result) = inference_rx.recv().await {
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+
+    let result_collection_task = tokio::spawn(async move {
+        let mut count = 0usize;
+        loop {
+            tokio::select! {
+                _ = stop_rx.changed() => {
+                    if *stop_rx.borrow() { break; }
+                }
+                maybe = inference_rx.recv() => {
+                    match maybe {
+                        Some(mut result) => {
+                            result.timing.controller_received = Some(current_timestamp_micros());
+                            count += 1;
+                            info!("Controller received result {} for sequence_id: {}", count, result.sequence_id);
+                            results_clone.lock().unwrap().push(result);
+                        }
+                        None => break, // all senders dropped
+                    }
+                }
+            }
+        }
+        while let Ok(mut result) = inference_rx.try_recv() {
             result.timing.controller_received = Some(current_timestamp_micros());
-            info!("Controller received result for sequence_id: {}", result.sequence_id);
+            count += 1;
+            info!(
+                "(drain) Controller received result {} seq={}",
+                count, result.sequence_id
+            );
             results_clone.lock().unwrap().push(result);
         }
+        info!("Result collection task finished with {} results", count);
     });
 
-    tokio::spawn(start_controller_listener(Role::Controller {
-        result_handler: inference_tx,
+    let controller_listener_task = tokio::spawn(start_controller_listener(Role::Controller {
+        result_handler: inference_tx.clone(),
     }));
 
     let required_devices = match config.mode {
@@ -39,7 +68,9 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
 
     wait_for_devices(&required_devices).await;
 
-    let msg = Message::Control(ControlMessage::StartExperiment { config: config.clone() });
+    let msg = Message::Control(ControlMessage::StartExperiment {
+        config: config.clone(),
+    });
     for id in &required_devices {
         if let Some(sender) = get_device_sender(id).await {
             sender.send(msg.clone())?;
@@ -59,6 +90,7 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
     let mut sequence_id: u64 = 0;
     let mut frame_number: u64 = 1;
     let pulse_interval = Duration::from_millis((1000.0 / config.fixed_fps) as u64);
+    let mut expected_results = 0u64;
 
     while start.elapsed().as_secs() < config.duration_seconds {
         if let Some(sender) = get_device_sender(&Pi).await {
@@ -72,11 +104,24 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
 
             sequence_id += 1;
             frame_number = (frame_number + 30 - 1) % MAX_FRAME_SEQUENCE + 1;
+            expected_results += 1;
         }
         sleep(pulse_interval).await;
     }
 
-    sleep(Duration::from_millis(2500)).await;
+    info!(
+        "Finished sending {} pulses. Waiting 5 seconds for results...",
+        expected_results
+    );
+    sleep(Duration::from_secs(5)).await;
+
+    let final_count_now = results.lock().unwrap().len();
+    info!(
+        "Collected {} results out of {} pulses sent ({:.1}% success rate)",
+        final_count_now,
+        expected_results,
+        (final_count_now as f32 / expected_results as f32) * 100.0
+    );
 
     let shutdown = Message::Control(ControlMessage::Shutdown);
     for id in &required_devices {
@@ -85,10 +130,40 @@ pub async fn run_controller(config: ExperimentConfig) -> Result<(), Box<dyn Erro
         }
     }
 
+    shared::connection::wait_for_disconnections(&required_devices).await;
+
+    controller_listener_task.abort();
+    let _ = controller_listener_task.await;
+
+    let _ = stop_tx.send(true);
+
+    drop(inference_tx);
+
+    match timeout(Duration::from_secs(2), result_collection_task).await {
+        Ok(joined) => {
+            if let Err(e) = joined {
+                warn!("Result collection task error: {:?}", e);
+            }
+        }
+        Err(_) => {
+            warn!("Result collector did not stop in time; aborting.");
+        }
+    }
+
     info!("Shutdown complete");
 
     let locked_results = results.lock().unwrap();
+    let final_count = locked_results.len();
+    info!(
+        "Generating CSV with {} results for experiment {}",
+        final_count, config.experiment_id
+    );
+
     generate_analysis_csv(&locked_results, &config.experiment_id, &config)?;
+    info!(
+        "Experiment {} completed with {} results saved",
+        config.experiment_id, final_count
+    );
     Ok(())
 }
 
@@ -103,7 +178,11 @@ struct TestConfig {
 impl Default for TestConfig {
     fn default() -> Self {
         Self {
-            models: vec!["yolov5n".to_string(), "yolov5s".to_string(), "yolov5m".to_string()],
+            models: vec![
+                "yolov5n".to_string(),
+                "yolov5s".to_string(),
+                "yolov5m".to_string(),
+            ],
             fps_values: vec![1.0, 5.0, 10.0, 15.0],
             modes: vec![ExperimentMode::LocalOnly, ExperimentMode::Offload],
             duration_seconds: DEFAULT_DURATION_SECONDS,
@@ -118,13 +197,15 @@ impl TestConfig {
         for arg in args {
             match arg.as_str() {
                 a if a.starts_with("--models=") => {
-                    config.models = a.trim_start_matches("--models=")
+                    config.models = a
+                        .trim_start_matches("--models=")
                         .split(',')
                         .map(String::from)
                         .collect();
                 }
                 a if a.starts_with("--fps=") => {
-                    config.fps_values = a.trim_start_matches("--fps=")
+                    config.fps_values = a
+                        .trim_start_matches("--fps=")
                         .split(',')
                         .filter_map(|s| s.parse::<f32>().ok())
                         .collect();
@@ -158,12 +239,14 @@ impl TestConfig {
 }
 
 async fn run_single_experiment(args: &[String]) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let model_name = args.iter()
+    let model_name = args
+        .iter()
         .find(|arg| arg.starts_with("--model="))
         .map(|arg| arg.trim_start_matches("--model=").to_string())
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    let fps = args.iter()
+    let fps = args
+        .iter()
         .find(|arg| arg.starts_with("--fps="))
         .and_then(|arg| arg.trim_start_matches("--fps=").parse::<f32>().ok())
         .unwrap_or(DEFAULT_SEND_FPS);
@@ -192,7 +275,10 @@ async fn run_test_suite(test_config: TestConfig) -> Result<(), Box<dyn Error + S
     info!("Models: {:?}", test_config.models);
     info!("FPS values: {:?}", test_config.fps_values);
     info!("Modes: {:?}", test_config.modes);
-    info!("Duration per test: {} seconds", test_config.duration_seconds);
+    info!(
+        "Duration per test: {} seconds",
+        test_config.duration_seconds
+    );
     info!("Total experiments: {}", test_config.total_experiments());
     info!("Estimated total time: {:?}", test_config.estimated_time());
     info!("=================================================");
@@ -206,23 +292,29 @@ async fn run_test_suite(test_config: TestConfig) -> Result<(), Box<dyn Error + S
                 current += 1;
 
                 info!("\n=================================================");
-                info!("Experiment {}/{}: Model={}, FPS={}, Mode={:?}",
-                      current, total, model, fps, mode);
+                info!(
+                    "Experiment {}/{}: Model={}, FPS={}, Mode={:?}",
+                    current, total, model, fps, mode
+                );
                 info!("=================================================");
 
                 let experiment_id = format!("{:?}_{}_{}fps", mode, model, fps);
-                let mut config = ExperimentConfig::new(experiment_id.clone(), mode.clone(), model.clone());
+                let mut config =
+                    ExperimentConfig::new(experiment_id.clone(), mode.clone(), model.clone());
                 config.fixed_fps = *fps;
                 config.duration_seconds = test_config.duration_seconds;
 
                 match run_controller(config).await {
                     Ok(_) => info!("✓ Experiment {} completed", experiment_id),
-                    Err(e) => eprintln!("✗ Experiment {} failed: {}", experiment_id, e),
+                    Err(e) => {
+                        eprintln!("✗ Experiment {} failed: {}", experiment_id, e);
+                        // Continue with next experiment
+                    }
                 }
 
                 if current < total {
-                    info!("Waiting 10 seconds before next experiment...");
-                    sleep(Duration::from_secs(10)).await;
+                    info!("Waiting 15 seconds before next experiment...");
+                    sleep(Duration::from_secs(15)).await; // Increased for cleanup
                 }
             }
         }
@@ -250,24 +342,41 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 fn generate_analysis_csv(
     results: &[InferenceMessage],
     experiment_id: &str,
-    config: &ExperimentConfig
+    config: &ExperimentConfig,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if results.is_empty() {
-        info!("No results to save for {}", experiment_id);
+        warn!("No results to save for experiment: {}", experiment_id);
         return Ok(());
     }
 
     std::fs::create_dir_all("logs")?;
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("logs/experiment_{}_{}.csv", experiment_id, timestamp);
+
+    info!("Saving {} results to {}", results.len(), filename);
     let mut writer = Writer::from_path(&filename)?;
 
     writer.write_record(&[
-        "sequence_id", "frame_number", "pi_hostname", "pi_capture_start", "pi_sent_to_jetson",
-        "jetson_received", "jetson_sent_result", "controller_sent_pulse", "controller_received",
-        "pi_overhead_us", "jetson_overhead_us", "network_latency_us", "total_latency_us",
-        "inference_us", "frame_size_bytes", "detection_count", "image_width", "image_height",
-        "model_name", "experiment_mode",
+        "sequence_id",
+        "frame_number",
+        "pi_hostname",
+        "pi_capture_start",
+        "pi_sent_to_jetson",
+        "jetson_received",
+        "jetson_sent_result",
+        "controller_sent_pulse",
+        "controller_received",
+        "pi_overhead_us",
+        "jetson_overhead_us",
+        "network_latency_us",
+        "total_latency_us",
+        "inference_us",
+        "frame_size_bytes",
+        "detection_count",
+        "image_width",
+        "image_height",
+        "model_name",
+        "experiment_mode",
     ])?;
 
     for r in results {
@@ -308,7 +417,11 @@ fn generate_analysis_csv(
     }
 
     writer.flush()?;
-    info!("Analysis saved to {}", filename);
+    info!(
+        "Analysis saved to {} with {} records",
+        filename,
+        results.len()
+    );
     Ok(())
 }
 
