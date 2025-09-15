@@ -28,7 +28,7 @@ pub enum Message {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControlMessage {
-    StartExperiment { config: ExperimentConfig },
+    ConfigureExperiment { config: ExperimentConfig },
     Shutdown,
     ReadyToStart,
     BeginExperiment,

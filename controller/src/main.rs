@@ -103,7 +103,7 @@ impl ControllerHarness {
 
         wait_for_devices(&required_devices).await;
 
-        let msg = Message::Control(ControlMessage::StartExperiment {
+        let msg = Message::Control(ControlMessage::ConfigureExperiment {
             config: config.clone(),
         });
         for id in &required_devices {
