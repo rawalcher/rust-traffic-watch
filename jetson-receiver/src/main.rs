@@ -208,7 +208,7 @@ async fn wait_for_experiment_config(
 ) -> Result<ExperimentConfig, Box<dyn Error + Send + Sync>> {
     loop {
         match read_message(reader).await? {
-            Message::Control(ControlMessage::StartExperiment { config }) => return Ok(config),
+            Message::Control(ControlMessage::ConfigureExperiment { config }) => return Ok(config),
             Message::Control(ControlMessage::Shutdown) => {
                 return Err("Shutdown during config wait".into());
             }
