@@ -1,0 +1,46 @@
+@startuml
+hide footbox
+
+skinparam defaultFontSize 14
+skinparam sequence {
+  GroupHeaderFontSize 14
+  ParticipantPadding 10
+  BoxPadding 5
+  WrapMessageWidth 150
+  MaxMessageSize 150
+}
+skinparam participant {
+  FontSize 18
+}
+skinparam arrow {
+  FontSize 18
+}
+skinparam SequenceDividerFontSize 18
+skinparam SequenceDividerFontStyle normal
+skinparam SequenceDividerBorderThickness 1
+skinparam sequenceMessageAlign reverseDirection
+
+autonumber 1
+
+participant C as "Client"
+participant LPN as "Local\nProcessing\nNode"
+
+== Setup ==
+LPN -> C: Hello(DeviceId)
+C -> LPN: ConfigureExperiment
+LPN <- LPN: Warmup model
+LPN -> C: ReadyToStart
+
+== Run ==
+C -> LPN: BeginExperiment
+
+loop Inference cycle (every Δt)
+  C -> LPN: Pulse(TimingMetadata)
+  LPN <- LPN: Prepare Frame
+  LPN <- LPN: Run Inference
+  LPN -> C: Result(InferenceMessage)
+end
+
+== Teardown ==
+C -> LPN: Shutdown
+@enduml

@@ -1,0 +1,52 @@
+@startuml
+hide footbox
+
+skinparam defaultFontSize 14
+skinparam sequence {
+  GroupHeaderFontSize 14
+  ParticipantPadding 10
+  BoxPadding 5
+  WrapMessageWidth 150
+  MaxMessageSize 150
+}
+skinparam participant {
+  FontSize 18
+}
+skinparam arrow {
+  FontSize 18
+}
+skinparam SequenceDividerFontSize 18
+skinparam SequenceDividerFontStyle normal
+skinparam SequenceDividerBorderThickness 1
+skinparam sequenceMessageAlign reverseDirection
+
+autonumber 1
+
+participant C as "Client"
+participant LPN as "Local\nProcessing\nNode"
+participant RIN as "Remote\nInference\nNode"
+
+== Setup ==
+LPN -> C: Hello(DeviceId)
+RIN -> C: Hello(DeviceId)
+C -> LPN: ConfigureExperiment
+C -> RIN: ConfigureExperiment
+LPN -> C: ReadyToStart
+RIN <- RIN: Warmup model
+RIN -> C: ReadyToStart
+
+== Run ==
+C -> LPN: BeginExperiment
+C -> RIN: BeginExperiment
+loop Inference cycle (every Δt)
+  C -> LPN: Pulse(TimingMetadata)
+  LPN <- LPN: Prepare Frame
+  LPN -> RIN: Frame(FrameMessage)
+  RIN <- RIN: Run Inference
+  RIN -> C: Result(InferenceMessage)
+end
+
+== Teardown ==
+C -> LPN: Shutdown
+C -> RIN: Shutdown
+@enduml
