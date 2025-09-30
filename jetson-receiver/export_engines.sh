@@ -6,7 +6,7 @@ mkdir -p "$OUTDIR/engines"
 cd "$OUTDIR"
 
 # deps (Jetson/Py3.8-friendly)
-pip3 install --user --no-cache-dir "numpy==1.23.5" "onnx==1.14.1" "protobuf<4"
+pip3 install --user --no-cache-dir "numpy==1.23.5" "onnx==1.14.1" "protobuf<4" "seaborn" "pycuda"
 
 # YOLOv5 v6.2 → ONNX (640)
 [ -d yolov5-v6.2 ] || git clone -b v6.2 https://github.com/ultralytics/yolov5.git yolov5-v6.2
