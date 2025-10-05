@@ -1,5 +1,3 @@
-// src/main.rs
-
 use std::{env, error::Error};
 
 use csv::Writer;
@@ -16,6 +14,8 @@ use shared::constants::*;
 use shared::current_timestamp_micros;
 use shared::types::*;
 use shared::DeviceId::{self, Pi};
+use shared::ImageCodecKind::{JpegLossy, PngLossless, WebpLossless, WebpLossy};
+use shared::ImageResolutionType::{FHD, HD, LETTERBOX};
 
 struct ControllerHarness {
     active_sink_tx: watch::Sender<Option<mpsc::UnboundedSender<InferenceMessage>>>,
@@ -206,19 +206,21 @@ struct TestConfig {
     fps_values: Vec<f32>,
     modes: Vec<ExperimentMode>,
     duration_seconds: u64,
+    codecs: Vec<ImageCodecKind>,
+    tiers: Vec<Tier>,
+    resolutions: Vec<ImageResolutionType>,
 }
 
 impl Default for TestConfig {
     fn default() -> Self {
         Self {
-            models: vec![
-                "yolov5n".to_string(),
-                "yolov5s".to_string(),
-                "yolov5m".to_string(),
-            ],
+            models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
             fps_values: vec![1.0, 5.0, 10.0, 15.0],
             modes: vec![ExperimentMode::LocalOnly, ExperimentMode::Offload],
             duration_seconds: DEFAULT_DURATION_SECONDS,
+            codecs: vec![JpegLossy, WebpLossy, PngLossless, WebpLossless],
+            tiers: vec![Tier::T1, Tier::T2, Tier::T3],
+            resolutions: vec![FHD, HD, LETTERBOX],
         }
     }
 }
@@ -248,12 +250,37 @@ impl TestConfig {
                         config.duration_seconds = d;
                     }
                 }
+                a if a.starts_with("--codecs=") => {
+                    config.codecs = a
+                        .trim_start_matches("--codecs=")
+                        .split(',')
+                        .filter_map(parse_codec)
+                        .collect();
+                }
+                a if a.starts_with("--tiers=") => {
+                    config.tiers = a
+                        .trim_start_matches("--tiers=")
+                        .split(',')
+                        .filter_map(parse_tier)
+                        .collect();
+                }
+                a if a.starts_with("--resolutions=") => {
+                    config.resolutions = a
+                        .trim_start_matches("--resolutions=")
+                        .split(',')
+                        .filter_map(parse_resolution)
+                        .collect();
+                }
                 "--local-only" => config.modes = vec![ExperimentMode::LocalOnly],
                 "--remote-only" => config.modes = vec![ExperimentMode::Offload],
+
                 "--quick" => {
                     config.duration_seconds = 60;
-                    config.models = vec!["yolov5n".to_string()];
+                    config.models = vec!["yolov5n".into()];
                     config.fps_values = vec![1.0, 10.0];
+                    config.codecs = vec![JpegLossy];
+                    config.tiers = vec![Tier::T2];
+                    config.resolutions = vec![FHD];
                 }
                 _ => {}
             }
@@ -263,7 +290,12 @@ impl TestConfig {
     }
 
     fn total_experiments(&self) -> usize {
-        self.models.len() * self.fps_values.len() * self.modes.len()
+        self.models.len()
+            * self.fps_values.len()
+            * self.modes.len()
+            * self.codecs.len()
+            * self.tiers.len()
+            * self.resolutions.len()
     }
 
     fn estimated_time(&self) -> Duration {
@@ -292,10 +324,42 @@ async fn run_single_experiment(
         Some(flag) if flag == "--remote" => vec![ExperimentMode::Offload],
         _ => vec![ExperimentMode::LocalOnly, ExperimentMode::Offload],
     };
+    let codec = args
+        .iter()
+        .find(|a| a.starts_with("--codec="))
+        .and_then(|a| parse_codec(a.trim_start_matches("--codec=")))
+        .unwrap_or(JpegLossy);
+
+    let resolution = args
+        .iter()
+        .find(|a| a.starts_with("--resolution="))
+        .and_then(|a| parse_resolution(a.trim_start_matches("--resolution=")))
+        .unwrap_or(FHD);
+
+    let tier = args
+        .iter()
+        .find(|a| a.starts_with("--tier="))
+        .and_then(|a| parse_tier(a.trim_start_matches("--tier=")))
+        .unwrap_or(Tier::T2);
+
+    let encoding = EncodingSpec {
+        codec,
+        tier,
+        resolution,
+    };
 
     for mode in modes {
-        let experiment_id = format!("{:?}_{}_{}fps", mode, model_name, fps);
-        let mut config = ExperimentConfig::new(experiment_id.clone(), mode, model_name.clone());
+        let experiment_id = format!(
+            "{:?}_{}_{}fps_{:?}_{:?}_{:?}",
+            mode, model_name, fps, codec, tier, resolution
+        );
+
+        let mut config = ExperimentConfig::new(
+            experiment_id.clone(),
+            mode,
+            model_name.clone(),
+            encoding.clone(),
+        );
         config.fixed_fps = fps;
 
         info!("Starting single experiment: {}", experiment_id);
@@ -314,6 +378,9 @@ async fn run_test_suite(
     info!("Models: {:?}", test_config.models);
     info!("FPS values: {:?}", test_config.fps_values);
     info!("Modes: {:?}", test_config.modes);
+    info!("Codecs: {:?}", test_config.codecs);
+    info!("Tiers: {:?}", test_config.tiers);
+    info!("Resolutions: {:?}", test_config.resolutions);
     info!(
         "Duration per test: {} seconds",
         test_config.duration_seconds
@@ -328,31 +395,47 @@ async fn run_test_suite(
     for model in &test_config.models {
         for fps in &test_config.fps_values {
             for mode in &test_config.modes {
-                current += 1;
+                for codec in &test_config.codecs {
+                    for tier in &test_config.tiers {
+                        for resolution in &test_config.resolutions {
+                            current += 1;
 
-                info!("=================================================");
-                info!(
-                    "Experiment {}/{}: Model={}, FPS={}, Mode={:?}",
-                    current, total, model, fps, mode
-                );
-                info!("=================================================");
+                            info!("=================================================");
+                            info!(
+                                "Experiment {}/{}: Model={}, FPS={}, Mode={:?}, Codec={:?}, Tier={:?}, Res={:?}",
+                                current, total, model, fps, mode, codec, tier, resolution
+                            );
+                            info!("=================================================");
 
-                let experiment_id = format!("{:?}_{}_{}fps", mode, model, fps);
-                let mut config =
-                    ExperimentConfig::new(experiment_id.clone(), mode.clone(), model.clone());
-                config.fixed_fps = *fps;
-                config.duration_seconds = test_config.duration_seconds;
+                            let experiment_id = format!(
+                                "{:?}_{}_{}fps_{:?}_{:?}_{:?}",
+                                mode, model, fps, codec, tier, resolution
+                            );
 
-                match harness.run_controller(config).await {
-                    Ok(_) => info!("✓ Experiment {} completed", experiment_id),
-                    Err(e) => {
-                        eprintln!("✗ Experiment {} failed: {}", experiment_id, e);
+                            let mut config = ExperimentConfig::new(
+                                experiment_id.clone(),
+                                mode.clone(),
+                                model.clone(),
+                                EncodingSpec {
+                                    codec: *codec,
+                                    tier: *tier,
+                                    resolution: *resolution,
+                                },
+                            );
+                            config.fixed_fps = *fps;
+                            config.duration_seconds = test_config.duration_seconds;
+
+                            match harness.run_controller(config).await {
+                                Ok(_) => info!("✓ Experiment {} completed", experiment_id),
+                                Err(e) => eprintln!("✗ Experiment {} failed: {}", experiment_id, e),
+                            }
+
+                            if current < total {
+                                info!("Waiting 15 seconds before next experiment...");
+                                sleep(Duration::from_secs(15)).await;
+                            }
+                        }
                     }
-                }
-
-                if current < total {
-                    info!("Waiting 15 seconds before next experiment...");
-                    sleep(Duration::from_secs(15)).await; // extra cleanup time
                 }
             }
         }
@@ -379,6 +462,33 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 }
 
+fn parse_codec(s: &str) -> Option<ImageCodecKind> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "jpg" | "jpglossy" => Some(JpegLossy),
+        "webplossy" => Some(WebpLossy),
+        "png" | "pnglossless" => Some(PngLossless),
+        "webglossless" => Some(WebpLossless),
+        _ => None,
+    }
+}
+
+fn parse_resolution(s: &str) -> Option<ImageResolutionType> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "fhd" | "1080p" => Some(FHD),
+        "hd" | "720p" => Some(HD),
+        "letterbox" | "lb" => Some(LETTERBOX),
+        _ => None,
+    }
+}
+
+fn parse_tier(s: &str) -> Option<Tier> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "t1" => Some(Tier::T1),
+        "t2" => Some(Tier::T2),
+        "t3" => Some(Tier::T3),
+        _ => None,
+    }
+}
 fn generate_analysis_csv(
     results: &[InferenceMessage],
     experiment_id: &str,
@@ -417,6 +527,9 @@ fn generate_analysis_csv(
         "image_height",
         "model_name",
         "experiment_mode",
+        "codec",
+        "tier",
+        "resolution",
     ])?;
 
     for r in results {
@@ -453,15 +566,14 @@ fn generate_analysis_csv(
             i.image_height.to_string(),
             i.model_name.clone(),
             i.experiment_mode.clone(),
+            format!("{:?}", config.encoding_spec.codec),
+            format!("{:?}", config.encoding_spec.tier),
+            format!("{:?}", config.encoding_spec.resolution),
         ])?;
     }
 
     writer.flush()?;
-    info!(
-        "Analysis saved to {} with {} records",
-        filename,
-        results.len()
-    );
+    info!("Analysis saved to {} with {} records", filename, results.len());
     Ok(())
 }
 

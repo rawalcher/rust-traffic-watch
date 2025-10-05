@@ -122,7 +122,7 @@ pub fn perform_python_inference_with_counts(
     model_name: &str,
     experiment_mode: &str,
 ) -> Result<InferenceResult, String> {
-    let image_bytes = &frame_message.frame_data;
+    let image_bytes = &frame_message.frame.frame_data;
 
     let start = Some(current_timestamp_micros());
     let result = detector.detect_objects(image_bytes)?;

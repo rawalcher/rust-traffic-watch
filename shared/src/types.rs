@@ -1,6 +1,7 @@
 use crate::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_SEND_FPS};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use strum_macros::Display;
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceId {
@@ -8,6 +9,7 @@ pub enum DeviceId {
     Jetson,
 }
 
+// TODO check if now removable
 impl fmt::Display for DeviceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -50,10 +52,16 @@ pub struct TimingMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameMessage {
     pub sequence_id: u64,
+    pub timing: TimingMetadata,
+    pub frame: Frame,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Frame {
     pub frame_data: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    pub timing: TimingMetadata,
+    pub encoding: EncodingSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +96,7 @@ pub struct ExperimentConfig {
     pub experiment_id: String,
     pub model_name: String,
     pub mode: ExperimentMode,
+    pub encoding_spec: EncodingSpec,
     pub duration_seconds: u64,
     pub fixed_fps: f32,
 }
@@ -99,11 +108,12 @@ pub enum ExperimentMode {
 }
 
 impl ExperimentConfig {
-    pub fn new(experiment_id: String, mode: ExperimentMode, model_name: String) -> Self {
+    pub fn new(experiment_id: String, mode: ExperimentMode, model_name: String, encoding_spec: EncodingSpec) -> Self {
         Self {
             experiment_id,
             model_name,
             mode,
+            encoding_spec,
             duration_seconds: DEFAULT_DURATION_SECONDS,
             fixed_fps: DEFAULT_SEND_FPS,
         }
@@ -120,6 +130,28 @@ pub struct ObjectCounts {
     pub pedestrians: u32,
     pub total_vehicles: u32,
     pub total_objects: u32,
+}
+
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
+pub enum ImageCodecKind {
+    JpegLossy,
+    PngLossless,
+    WebpLossy,
+    WebpLossless,
+}
+
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
+pub enum ImageResolutionType {
+    FHD,
+    HD,
+    LETTERBOX,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncodingSpec {
+    pub codec: ImageCodecKind,
+    pub tier: crate::constants::Tier,
+    pub resolution: ImageResolutionType,
 }
 
 pub fn current_timestamp_micros() -> u64 {
