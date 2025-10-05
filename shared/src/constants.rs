@@ -97,15 +97,15 @@ pub mod tiers {
 
 pub fn res_folder(res: ImageResolutionType) -> &'static str {
     match res {
-        ImageResolutionType::FHD => "fhd",
-        ImageResolutionType::HD => "hd",
+        ImageResolutionType::FHD => "FHD",
+        ImageResolutionType::HD => "HD",
         ImageResolutionType::LETTERBOX => "640",
     }
 }
 
 pub fn codec_folder(codec: ImageCodecKind) -> &'static str {
     match codec {
-        ImageCodecKind::JpegLossy => "jpeg",
+        ImageCodecKind::JpegLossy => "jpg",
         ImageCodecKind::PngLossless => "png",
         ImageCodecKind::WebpLossy => "webp",
         ImageCodecKind::WebpLossless => "webp-lossless",
