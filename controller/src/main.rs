@@ -14,7 +14,7 @@ use shared::constants::*;
 use shared::current_timestamp_micros;
 use shared::types::*;
 use shared::DeviceId::{self, Pi};
-use shared::ImageCodecKind::{JpegLossy, PngLossless, WebpLossless, WebpLossy};
+use shared::ImageCodecKind::{JpgLossy, PngLossless, WebpLossless, WebpLossy};
 use shared::ImageResolutionType::{FHD, HD, LETTERBOX};
 
 struct ControllerHarness {
@@ -218,7 +218,7 @@ impl Default for TestConfig {
             fps_values: vec![1.0, 5.0, 10.0, 15.0],
             modes: vec![ExperimentMode::LocalOnly, ExperimentMode::Offload],
             duration_seconds: DEFAULT_DURATION_SECONDS,
-            codecs: vec![JpegLossy, WebpLossy, PngLossless, WebpLossless],
+            codecs: vec![JpgLossy, WebpLossy, PngLossless, WebpLossless],
             tiers: vec![Tier::T1, Tier::T2, Tier::T3],
             resolutions: vec![FHD, HD, LETTERBOX],
         }
@@ -278,7 +278,7 @@ impl TestConfig {
                     config.duration_seconds = 60;
                     config.models = vec!["yolov5n".into()];
                     config.fps_values = vec![1.0, 10.0];
-                    config.codecs = vec![JpegLossy];
+                    config.codecs = vec![JpgLossy];
                     config.tiers = vec![Tier::T2];
                     config.resolutions = vec![FHD];
                 }
@@ -328,7 +328,7 @@ async fn run_single_experiment(
         .iter()
         .find(|a| a.starts_with("--codec="))
         .and_then(|a| parse_codec(a.trim_start_matches("--codec=")))
-        .unwrap_or(JpegLossy);
+        .unwrap_or(JpgLossy);
 
     let resolution = args
         .iter()
@@ -464,7 +464,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
 fn parse_codec(s: &str) -> Option<ImageCodecKind> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "jpg" | "jpglossy" => Some(JpegLossy),
+        "jpg" | "jpglossy" => Some(JpgLossy),
         "webplossy" => Some(WebpLossy),
         "png" | "pnglossless" => Some(PngLossless),
         "webglossless" => Some(WebpLossless),

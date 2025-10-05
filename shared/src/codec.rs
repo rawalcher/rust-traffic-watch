@@ -22,7 +22,7 @@ impl ImageCodec {
 
         let out = match spec.codec {
             ImageCodecKind::PngLossless   => encode_png(&img, spec.tier)?,
-            ImageCodecKind::JpegLossy     => encode_jpeg(&img, spec.tier)?,
+            ImageCodecKind::JpgLossy => encode_jpeg(&img, spec.tier)?,
             ImageCodecKind::WebpLossy     => encode_webp_lossy(&img, spec.tier)?,
             ImageCodecKind::WebpLossless  => encode_webp_lossless(&img, spec.tier)?,
         };
