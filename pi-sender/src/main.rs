@@ -7,9 +7,11 @@ use std::time::Duration;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use shared::codec::ImageCodec;
 use shared::network::{read_message, spawn_writer};
+
+const ENCODING_TIMEOUT_MS: u64 = 1000;
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -58,12 +60,20 @@ async fn handle_local_experiment(
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
+    // Use a shutdown signal instead of dropping the sender
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
     let pending_frame_inference = Arc::clone(&pending_frame);
     let inference_config = config.clone();
     let ctrl_tx2 = ctrl_tx.clone();
 
     let inference_task = tokio::spawn(async move {
         loop {
+            if *shutdown_rx.borrow() {
+                info!("Inference task received shutdown signal");
+                break;
+            }
+
             let frame = {
                 let mut pending = pending_frame_inference.lock().await;
                 pending.take()
@@ -78,8 +88,8 @@ async fn handle_local_experiment(
                 match handle_frame_local(frame_msg, &mut detector, &inference_config).await {
                     Ok(result) => {
                         let seq_id = result.sequence_id;
-                        if let Err(e) = result_tx.send(result) {
-                            error!("Failed to send result to channel: {}", e);
+                        if result_tx.send(result).is_err() {
+                            info!("Result channel closed, inference task exiting");
                             break;
                         }
                         info!("Pi: Completed local inference for sequence_id={}", seq_id);
@@ -89,9 +99,10 @@ async fn handle_local_experiment(
                     }
                 }
             } else {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
+        info!("Inference task shutting down detector");
         let _ = detector.shutdown();
     });
 
@@ -110,47 +121,81 @@ async fn handle_local_experiment(
                         let seq_id = timing.sequence_id;
                         let frame_number = timing.frame_number;
 
-                        let (frame_data, width, height) = match load_and_encode_sample(frame_number, config.encoding_spec.clone()) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                error!("Failed to prepare encoded frame {}: {}", frame_number, e);
-                                continue;
+                        let config_clone = config.clone();
+                        let pending_frame_clone = Arc::clone(&pending_frame);
+
+                        let encoding_future = tokio::task::spawn(async move {
+                            load_and_encode_sample(frame_number, config_clone.encoding_spec.clone())
+                        });
+
+                        match timeout(Duration::from_millis(ENCODING_TIMEOUT_MS), encoding_future).await {
+                            Ok(Ok(Ok((frame_data, width, height)))) => {
+                                debug!(
+                                    "Prepared frame {} ({:?}, tier={:?}, res={:?}) -> {} bytes",
+                                    frame_number,
+                                    config.encoding_spec.codec,
+                                    config.encoding_spec.tier,
+                                    config.encoding_spec.resolution,
+                                    frame_data.len()
+                                );
+
+                                let frame_msg = FrameMessage {
+                                    sequence_id: timing.sequence_id,
+                                    timing,
+                                    frame: Frame {
+                                        frame_data,
+                                        width,
+                                        height,
+                                        encoding: config.encoding_spec.clone(),
+                                    },
+                                };
+
+                                let mut pending = pending_frame_clone.lock().await;
+                                let old_seq = pending.as_ref().map(|f| f.sequence_id);
+                                *pending = Some(frame_msg);
+
+                                if let Some(old) = old_seq {
+                                    debug!("Pi: Dropped frame {} for newer frame {}", old, seq_id);
+                                }
+                                info!("Pi: Updated pending frame to sequence_id={}", seq_id);
                             }
-                        };
-
-                        debug!(
-                            "Prepared frame {} ({:?}, tier={:?}, res={:?}) -> {} bytes",
-                            frame_number,
-                            config.encoding_spec.codec,
-                            config.encoding_spec.tier,
-                            config.encoding_spec.resolution,
-                            frame_data.len()
-                        );
-
-                        let frame_msg = FrameMessage {
-                            sequence_id: timing.sequence_id,
-                            timing,
-                            frame: Frame {
-                                frame_data,
-                                width,
-                                height,
-                                encoding: config.encoding_spec.clone(),
-                            },
-                        };
-
-                        // Swap in the newest pending frame (drop the older one if present)
-                        let mut pending = pending_frame.lock().await;
-                        let old_seq = pending.as_ref().map(|f| f.sequence_id);
-                        *pending = Some(frame_msg);
-
-                        if let Some(old) = old_seq {
-                            debug!("Pi: Dropped frame {} for newer frame {}", old, seq_id);
+                            Ok(Ok(Err(e))) => {
+                                error!("Failed to encode frame {}: {}", frame_number, e);
+                            }
+                            Ok(Err(e)) => {
+                                error!("Encoding task panicked for frame {}: {:?}", frame_number, e);
+                            }
+                            Err(_) => {
+                                warn!(
+                                    "Frame {} encoding TIMEOUT (>{}ms) - NOT VIABLE FOR LIVE PROCESSING",
+                                    frame_number, ENCODING_TIMEOUT_MS
+                                );
+                            }
                         }
-                        info!("Pi: Updated pending frame to sequence_id={}", seq_id);
                     }
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Experiment cycle complete, resetting for next experiment");
-                        inference_task.abort();
+                        info!("Shutdown received, cleaning up...");
+
+                        // Clear any pending frame
+                        {
+                            let mut pending = pending_frame.lock().await;
+                            *pending = None;
+                        }
+
+                        // Signal inference task to stop
+                        let _ = shutdown_tx.send(true);
+
+                        // Wait for inference task to complete
+                        match tokio::time::timeout(Duration::from_secs(3), inference_task).await {
+                            Ok(_) => {
+                                info!("Inference task completed gracefully");
+                            }
+                            Err(_) => {
+                                warn!("Inference task did not complete in 3s");
+                            }
+                        }
+
+                        info!("Experiment cycle complete, ready for next experiment");
                         break;
                     }
                     msg => warn!("Unexpected message during experiment: {:?}", msg),
@@ -190,11 +235,28 @@ async fn handle_offload_experiment(
     loop {
         match read_message(ctrl_reader).await? {
             Message::Pulse(timing) => {
-                match handle_frame_remote(timing, &config, &jetson_tx).await {
-                    Ok(_) => {}
-                    Err(e) => {
+                let config_clone = config.clone();
+                let jetson_tx_clone = jetson_tx.clone();
+
+                let encoding_future = tokio::spawn(async move {
+                    handle_frame_remote(timing, &config_clone, &jetson_tx_clone).await
+                });
+
+                match timeout(Duration::from_millis(ENCODING_TIMEOUT_MS), encoding_future).await {
+                    Ok(Ok(Ok(()))) => {
+                        // Success - frame encoded and sent
+                    }
+                    Ok(Ok(Err(e))) => {
                         error!("Failed to handle remote frame: {}", e);
-                        continue;
+                    }
+                    Ok(Err(e)) => {
+                        error!("Remote frame task panicked: {:?}", e);
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Remote frame encoding TIMEOUT (>{}ms) - NOT VIABLE FOR LIVE PROCESSING",
+                            ENCODING_TIMEOUT_MS
+                        );
                     }
                 }
             }
