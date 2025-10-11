@@ -46,7 +46,7 @@ async fn handle_local_experiment(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let pending_frame: Arc<Mutex<Option<FrameMessage>>> = Arc::new(Mutex::new(None));
 
-    let mut detector = PersistentPythonDetector::new(
+    let detector = PersistentPythonDetector::new(
         config.model_name.clone(),
         INFERENCE_PYTORCH_PATH.to_string(),
     )?;
@@ -60,7 +60,6 @@ async fn handle_local_experiment(
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
-    // Use a shutdown signal instead of dropping the sender
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     let pending_frame_inference = Arc::clone(&pending_frame);
@@ -68,6 +67,8 @@ async fn handle_local_experiment(
     let ctrl_tx2 = ctrl_tx.clone();
 
     let inference_task = tokio::spawn(async move {
+        let mut local_detector = detector;
+
         loop {
             if *shutdown_rx.borrow() {
                 info!("Inference task received shutdown signal");
@@ -85,7 +86,7 @@ async fn handle_local_experiment(
                     frame_msg.sequence_id
                 );
 
-                match handle_frame_local(frame_msg, &mut detector, &inference_config).await {
+                match handle_frame_local(frame_msg, &mut local_detector, &inference_config).await {
                     Ok(result) => {
                         let seq_id = result.sequence_id;
                         if result_tx.send(result).is_err() {
@@ -102,8 +103,12 @@ async fn handle_local_experiment(
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
-        info!("Inference task shutting down detector");
-        let _ = detector.shutdown();
+
+        info!("Shutting down detector...");
+        if let Err(e) = local_detector.shutdown() {
+            error!("Error shutting down detector: {}", e);
+        }
+        info!("Detector shutdown complete");
     });
 
     loop {
@@ -182,16 +187,17 @@ async fn handle_local_experiment(
                             *pending = None;
                         }
 
-                        // Signal inference task to stop
                         let _ = shutdown_tx.send(true);
 
-                        // Wait for inference task to complete
-                        match tokio::time::timeout(Duration::from_secs(3), inference_task).await {
-                            Ok(_) => {
+                        match tokio::time::timeout(Duration::from_secs(5), inference_task).await {
+                            Ok(Ok(())) => {
                                 info!("Inference task completed gracefully");
                             }
+                            Ok(Err(e)) => {
+                                error!("Inference task panicked: {:?}", e);
+                            }
                             Err(_) => {
-                                warn!("Inference task did not complete in 3s");
+                                error!("Inference task did not complete in 5s");
                             }
                         }
 
