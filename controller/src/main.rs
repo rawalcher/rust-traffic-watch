@@ -215,7 +215,7 @@ impl Default for TestConfig {
     fn default() -> Self {
         Self {
             models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1.0, 5.0, 10.0, 15.0],
+            fps_values: vec![1.0, 5.0, 10.0],
             modes: vec![ExperimentMode::LocalOnly, ExperimentMode::Offload],
             duration_seconds: DEFAULT_DURATION_SECONDS,
             codecs: vec![JpegLossy, WebpLossy, PngLossless, WebpLossless],
@@ -431,8 +431,8 @@ async fn run_test_suite(
                             }
 
                             if current < total {
-                                info!("Waiting 15 seconds before next experiment...");
-                                sleep(Duration::from_secs(15)).await;
+                                info!("Waiting 10 seconds before next experiment...");
+                                sleep(Duration::from_secs(10)).await;
                             }
                         }
                     }
