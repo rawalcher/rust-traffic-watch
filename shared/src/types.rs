@@ -134,7 +134,7 @@ pub struct ObjectCounts {
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 pub enum ImageCodecKind {
-    JpegLossy,
+    JpgLossy,
     PngLossless,
     WebpLossy,
     WebpLossless,
