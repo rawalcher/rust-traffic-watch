@@ -110,21 +110,25 @@ impl PersistentPythonDetector {
 
     pub fn shutdown(&mut self) -> Result<(), String> {
         if let Some(mut process) = self.process.take() {
-            debug!("Shutting down Python detector (PID: {:?})", process.id());
+            let pid = process.id();
+            debug!("Shutting down Python detector (PID: {})", pid);
 
             drop(process.stdin.take());
-            drop(process.stdout.take());
 
-            for i in 0..20 {
+            debug!("Waiting for Python process to finish current work...");
+            for i in 0..100 {
                 match process.try_wait() {
                     Ok(Some(status)) => {
-                        debug!("Python process exited gracefully with status: {:?}", status);
+                        debug!("Python process exited cleanly with status: {:?}", status);
                         return Ok(());
                     }
                     Ok(None) => {
                         std::thread::sleep(std::time::Duration::from_millis(100));
-                        if i % 5 == 0 {
-                            debug!("Waiting for Python process to exit... ({}/2s)", i * 100);
+                        if i > 0 && i % 10 == 0 {
+                            debug!(
+                                "Still waiting for Python process to finish... ({}s/10s)",
+                                i / 10
+                            );
                         }
                     }
                     Err(e) => {
@@ -134,33 +138,18 @@ impl PersistentPythonDetector {
                 }
             }
 
-            warn!("Python process did not exit gracefully, sending SIGTERM...");
-            if let Err(e) = signal_process(process.id(), libc::SIGTERM) {
-                warn!("Failed to send SIGTERM: {}", e);
-            }
-
-            for _ in 0..10 {
-                match process.try_wait() {
-                    Ok(Some(status)) => {
-                        debug!("Python process terminated with status: {:?}", status);
-                        return Ok(());
-                    }
-                    Ok(None) => {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                    Err(_) => break,
-                }
-            }
-
-            error!("Python process still running, sending SIGKILL...");
+            warn!(
+                "Python process (PID: {}) did not exit after 10s, force killing",
+                pid
+            );
             if let Err(e) = process.kill() {
-                error!("Failed to SIGKILL process: {}", e);
+                error!("Failed to kill process: {}", e);
                 return Err(format!("Failed to kill process: {}", e));
             }
 
             match process.wait() {
                 Ok(status) => {
-                    debug!("Python process forcefully killed with status: {:?}", status);
+                    warn!("Python process forcefully killed with status: {:?}", status);
                     Ok(())
                 }
                 Err(e) => {
@@ -186,17 +175,6 @@ impl PersistentPythonDetector {
             }
         } else {
             false
-        }
-    }
-}
-
-fn signal_process(pid: u32, signal: i32) -> Result<(), String> {
-    use std::io::Error;
-    unsafe {
-        if libc::kill(pid as i32, signal) == 0 {
-            Ok(())
-        } else {
-            Err(format!("kill() failed: {}", Error::last_os_error()))
         }
     }
 }

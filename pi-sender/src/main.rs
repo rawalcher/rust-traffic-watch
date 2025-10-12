@@ -85,6 +85,11 @@ async fn handle_local_experiment(
             };
 
             if let Some(frame_msg) = frame {
+                if *shutdown_rx.borrow() {
+                    info!("Inference task: Dropping frame {} due to shutdown", frame_msg.sequence_id);
+                    break;
+                }
+
                 info!(
                     "Pi: Starting local inference for sequence_id={}",
                     frame_msg.sequence_id
@@ -187,24 +192,26 @@ async fn handle_local_experiment(
 
                         let _ = shutdown_tx.send(true);
 
-                        match tokio::time::timeout(Duration::from_secs(3), inference_task).await {
-                            Ok(Ok(())) => {
-                                info!("Inference task completed gracefully");
-                            }
-                            Ok(Err(e)) => {
-                                error!("Inference task panicked: {:?}", e);
-                            }
-                            Err(_) => {
-                                error!("Inference task did not complete in 3s, forcing shutdown");
-                            }
-                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
 
-                        info!("Shutting down Python detector...");
+                        info!("Shutting down Python detector (will wait for in-flight inference)...");
                         let mut det = detector_arc.lock().await;
                         if let Err(e) = det.shutdown() {
                             error!("Failed to shutdown detector: {}", e);
                         } else {
                             info!("Detector shutdown successful");
+                        }
+
+                        match tokio::time::timeout(Duration::from_secs(1), inference_task).await {
+                            Ok(Ok(())) => {
+                                info!("Inference task completed");
+                            }
+                            Ok(Err(e)) => {
+                                error!("Inference task panicked: {:?}", e);
+                            }
+                            Err(_) => {
+                                warn!("Inference task did not exit in 1s (already stopped)");
+                            }
                         }
 
                         info!("Experiment cycle complete, ready for next experiment");
