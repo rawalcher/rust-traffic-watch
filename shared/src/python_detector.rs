@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use serde::{Deserialize, Serialize};
 use crate::types::*;
-use log::{debug};
+use log::{debug, warn};
 use crate::constants::PYTHON_VENV_PATH;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -23,7 +23,7 @@ struct PythonErrorResult {
 }
 
 pub struct PersistentPythonDetector {
-    process: Child,
+    process: Option<Child>,
 }
 
 impl PersistentPythonDetector {
@@ -35,7 +35,7 @@ impl PersistentPythonDetector {
             .arg(&model_name)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()) // directly pipe stderr to parent for debug
+            .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| format!("Spawn failed: {}", e))?;
 
@@ -46,12 +46,14 @@ impl PersistentPythonDetector {
             let trimmed = line.trim();
             if trimmed.contains("READY") {
                 debug!("Python process is ready");
-                return Ok(Self { process });
+                return Ok(Self { process: Some(process) });
             } else {
                 debug!("Python output: {}", trimmed);
             }
         }
 
+        let _ = process.kill();
+        let _ = process.wait();
         Err("Did not receive READY from Python".into())
     }
 
@@ -61,7 +63,8 @@ impl PersistentPythonDetector {
     }
 
     fn send_image(&mut self, image_bytes: &[u8]) -> Result<(), String> {
-        let stdin = self.process.stdin.as_mut().ok_or("Missing stdin".to_string())?;
+        let process = self.process.as_mut().ok_or("Process not running")?;
+        let stdin = process.stdin.as_mut().ok_or("Missing stdin".to_string())?;
 
         stdin
             .write_all(&(image_bytes.len() as u32).to_le_bytes())
@@ -79,7 +82,8 @@ impl PersistentPythonDetector {
     }
 
     fn receive_response(&mut self) -> Result<PythonDetectionResult, String> {
-        let stdout = self.process.stdout.as_mut().ok_or("Missing stdout")?;
+        let process = self.process.as_mut().ok_or("Process not running")?;
+        let stdout = process.stdout.as_mut().ok_or("Missing stdout")?;
 
         let mut length_buf = [0u8; 4];
         stdout.read_exact(&mut length_buf)
@@ -103,16 +107,72 @@ impl PersistentPythonDetector {
     }
 
     pub fn shutdown(&mut self) -> Result<(), String> {
-        debug!("Shutting down Python detector");
-        let _ = self.process.stdin.take(); // closes stdin to signal EOF
-        self.process.wait().map_err(|e| format!("Wait failed: {}", e))?;
-        Ok(())
+        if let Some(mut process) = self.process.take() {
+            debug!("Shutting down Python detector");
+            drop(process.stdin.take());
+
+            match process.try_wait() {
+                Ok(Some(status)) => {
+                    debug!("Python process already exited with status: {:?}", status);
+                    return Ok(());
+                }
+                Ok(None) => {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+
+                    match process.try_wait() {
+                        Ok(Some(status)) => {
+                            debug!("Python process exited gracefully with status: {:?}", status);
+                            return Ok(());
+                        }
+                        Ok(None) => {
+                            warn!("Python process did not exit gracefully, killing...");
+                            process.kill().map_err(|e| format!("Kill failed: {}", e))?;
+                        }
+                        Err(e) => {
+                            warn!("Error checking process status: {}", e);
+                            let _ = process.kill();
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Error checking process status: {}", e);
+                    let _ = process.kill();
+                }
+            }
+
+            match process.wait() {
+                Ok(status) => {
+                    debug!("Python process reaped with status: {:?}", status);
+                    Ok(())
+                }
+                Err(e) => Err(format!("Failed to wait for process: {}", e))
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn is_alive(&mut self) -> bool {
+        if let Some(ref mut process) = self.process {
+            match process.try_wait() {
+                Ok(None) => true,
+                Ok(Some(_)) => {
+                    self.process = None;
+                    false
+                }
+                Err(_) => false
+            }
+        } else {
+            false
+        }
     }
 }
 
 impl Drop for PersistentPythonDetector {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        if let Err(e) = self.shutdown() {
+            warn!("Error during PersistentPythonDetector drop: {}", e);
+        }
     }
 }
 
