@@ -1,9 +1,9 @@
+use crate::constants::PYTHON_VENV_PATH;
+use crate::types::*;
+use log::{debug, error, warn};
+use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-use serde::{Deserialize, Serialize};
-use crate::types::*;
-use log::{debug, warn};
-use crate::constants::PYTHON_VENV_PATH;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PythonDetectionResult {
@@ -46,7 +46,9 @@ impl PersistentPythonDetector {
             let trimmed = line.trim();
             if trimmed.contains("READY") {
                 debug!("Python process is ready");
-                return Ok(Self { process: Some(process) });
+                return Ok(Self {
+                    process: Some(process),
+                });
             } else {
                 debug!("Python output: {}", trimmed);
             }
@@ -86,68 +88,88 @@ impl PersistentPythonDetector {
         let stdout = process.stdout.as_mut().ok_or("Missing stdout")?;
 
         let mut length_buf = [0u8; 4];
-        stdout.read_exact(&mut length_buf)
+        stdout
+            .read_exact(&mut length_buf)
             .map_err(|e| format!("Failed to read response length: {}", e))?;
 
         let length = u32::from_le_bytes(length_buf) as usize;
 
         let mut buf = vec![0u8; length];
-        stdout.read_exact(&mut buf)
+        stdout
+            .read_exact(&mut buf)
             .map_err(|e| format!("Failed to read response data: {}", e))?;
 
-        let text = String::from_utf8(buf)
-            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+        let text = String::from_utf8(buf).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
-        serde_json::from_str::<PythonDetectionResult>(&text)
-            .or_else(|_| {
-                serde_json::from_str::<PythonErrorResult>(&text)
-                    .map_err(|e| format!("Parse error: {}", e))
-                    .and_then(|err| Err(err.error))
-            })
+        serde_json::from_str::<PythonDetectionResult>(&text).or_else(|_| {
+            serde_json::from_str::<PythonErrorResult>(&text)
+                .map_err(|e| format!("Parse error: {}", e))
+                .and_then(|err| Err(err.error))
+        })
     }
 
     pub fn shutdown(&mut self) -> Result<(), String> {
         if let Some(mut process) = self.process.take() {
-            debug!("Shutting down Python detector");
+            debug!("Shutting down Python detector (PID: {:?})", process.id());
+
             drop(process.stdin.take());
+            drop(process.stdout.take());
 
-            match process.try_wait() {
-                Ok(Some(status)) => {
-                    debug!("Python process already exited with status: {:?}", status);
-                    return Ok(());
-                }
-                Ok(None) => {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-
-                    match process.try_wait() {
-                        Ok(Some(status)) => {
-                            debug!("Python process exited gracefully with status: {:?}", status);
-                            return Ok(());
-                        }
-                        Ok(None) => {
-                            warn!("Python process did not exit gracefully, killing...");
-                            process.kill().map_err(|e| format!("Kill failed: {}", e))?;
-                        }
-                        Err(e) => {
-                            warn!("Error checking process status: {}", e);
-                            let _ = process.kill();
+            for i in 0..20 {
+                match process.try_wait() {
+                    Ok(Some(status)) => {
+                        debug!("Python process exited gracefully with status: {:?}", status);
+                        return Ok(());
+                    }
+                    Ok(None) => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        if i % 5 == 0 {
+                            debug!("Waiting for Python process to exit... ({}/2s)", i * 100);
                         }
                     }
+                    Err(e) => {
+                        warn!("Error checking process status: {}", e);
+                        break;
+                    }
                 }
-                Err(e) => {
-                    warn!("Error checking process status: {}", e);
-                    let _ = process.kill();
+            }
+
+            warn!("Python process did not exit gracefully, sending SIGTERM...");
+            if let Err(e) = signal_process(process.id(), libc::SIGTERM) {
+                warn!("Failed to send SIGTERM: {}", e);
+            }
+
+            for _ in 0..10 {
+                match process.try_wait() {
+                    Ok(Some(status)) => {
+                        debug!("Python process terminated with status: {:?}", status);
+                        return Ok(());
+                    }
+                    Ok(None) => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    Err(_) => break,
                 }
+            }
+
+            error!("Python process still running, sending SIGKILL...");
+            if let Err(e) = process.kill() {
+                error!("Failed to SIGKILL process: {}", e);
+                return Err(format!("Failed to kill process: {}", e));
             }
 
             match process.wait() {
                 Ok(status) => {
-                    debug!("Python process reaped with status: {:?}", status);
+                    debug!("Python process forcefully killed with status: {:?}", status);
                     Ok(())
                 }
-                Err(e) => Err(format!("Failed to wait for process: {}", e))
+                Err(e) => {
+                    error!("Failed to wait for killed process: {}", e);
+                    Err(format!("Failed to wait for process: {}", e))
+                }
             }
         } else {
+            debug!("No Python process to shutdown");
             Ok(())
         }
     }
@@ -160,7 +182,7 @@ impl PersistentPythonDetector {
                     self.process = None;
                     false
                 }
-                Err(_) => false
+                Err(_) => false,
             }
         } else {
             false
@@ -168,10 +190,24 @@ impl PersistentPythonDetector {
     }
 }
 
+fn signal_process(pid: u32, signal: i32) -> Result<(), String> {
+    use std::io::Error;
+    unsafe {
+        if libc::kill(pid as i32, signal) == 0 {
+            Ok(())
+        } else {
+            Err(format!("kill() failed: {}", Error::last_os_error()))
+        }
+    }
+}
+
 impl Drop for PersistentPythonDetector {
     fn drop(&mut self) {
-        if let Err(e) = self.shutdown() {
-            warn!("Error during PersistentPythonDetector drop: {}", e);
+        if self.process.is_some() {
+            error!("!!! PersistentPythonDetector dropped without explicit shutdown !!!");
+            if let Err(e) = self.shutdown() {
+                error!("Error during PersistentPythonDetector drop: {}", e);
+            }
         }
     }
 }
@@ -186,9 +222,8 @@ pub fn perform_python_inference_with_counts(
 
     let start = Some(current_timestamp_micros());
     let result = detector.detect_objects(image_bytes)?;
-    // wird schon passen :)
     let duration = Some(current_timestamp_micros() - start.unwrap()).unwrap();
-    
+
     Ok(InferenceResult {
         sequence_id: frame_message.sequence_id,
         detections: result.detections.clone(),
@@ -201,4 +236,3 @@ pub fn perform_python_inference_with_counts(
         experiment_mode: experiment_mode.to_string(),
     })
 }
-

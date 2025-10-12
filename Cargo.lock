@@ -842,6 +842,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "image",
+ "libc",
  "log",
  "mozjpeg",
  "once_cell",

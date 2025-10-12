@@ -1,6 +1,12 @@
 use log::{debug, error, info, warn};
+use shared::codec::ImageCodec;
 use shared::constants::*;
-use shared::{current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec, ExperimentConfig, ExperimentMode, Frame, FrameMessage, InferenceMessage, Message, PersistentPythonDetector};
+use shared::network::{read_message, spawn_writer};
+use shared::{
+    current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec,
+    ExperimentConfig, ExperimentMode, Frame, FrameMessage, InferenceMessage, Message,
+    PersistentPythonDetector,
+};
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,8 +14,6 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, timeout};
-use shared::codec::ImageCodec;
-use shared::network::{read_message, spawn_writer};
 
 const ENCODING_TIMEOUT_MS: u64 = 1000;
 
@@ -59,16 +63,16 @@ async fn handle_local_experiment(
     info!("Experiment started. Processing frames locally...");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
-
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     let pending_frame_inference = Arc::clone(&pending_frame);
     let inference_config = config.clone();
     let ctrl_tx2 = ctrl_tx.clone();
 
-    let inference_task = tokio::spawn(async move {
-        let mut local_detector = detector;
+    let detector_arc = Arc::new(Mutex::new(detector));
+    let detector_clone = Arc::clone(&detector_arc);
 
+    let inference_task = tokio::spawn(async move {
         loop {
             if *shutdown_rx.borrow() {
                 info!("Inference task received shutdown signal");
@@ -86,7 +90,8 @@ async fn handle_local_experiment(
                     frame_msg.sequence_id
                 );
 
-                match handle_frame_local(frame_msg, &mut local_detector, &inference_config).await {
+                let mut det = detector_clone.lock().await;
+                match handle_frame_local(frame_msg, &mut det, &inference_config).await {
                     Ok(result) => {
                         let seq_id = result.sequence_id;
                         if result_tx.send(result).is_err() {
@@ -103,12 +108,7 @@ async fn handle_local_experiment(
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
-
-        info!("Shutting down detector...");
-        if let Err(e) = local_detector.shutdown() {
-            error!("Error shutting down detector: {}", e);
-        }
-        info!("Detector shutdown complete");
+        info!("Inference task loop ended");
     });
 
     loop {
@@ -180,8 +180,6 @@ async fn handle_local_experiment(
                     }
                     Message::Control(ControlMessage::Shutdown) => {
                         info!("Shutdown received, cleaning up...");
-
-                        // Clear any pending frame
                         {
                             let mut pending = pending_frame.lock().await;
                             *pending = None;
@@ -189,7 +187,7 @@ async fn handle_local_experiment(
 
                         let _ = shutdown_tx.send(true);
 
-                        match tokio::time::timeout(Duration::from_secs(5), inference_task).await {
+                        match tokio::time::timeout(Duration::from_secs(3), inference_task).await {
                             Ok(Ok(())) => {
                                 info!("Inference task completed gracefully");
                             }
@@ -197,8 +195,16 @@ async fn handle_local_experiment(
                                 error!("Inference task panicked: {:?}", e);
                             }
                             Err(_) => {
-                                error!("Inference task did not complete in 5s");
+                                error!("Inference task did not complete in 3s, forcing shutdown");
                             }
+                        }
+
+                        info!("Shutting down Python detector...");
+                        let mut det = detector_arc.lock().await;
+                        if let Err(e) = det.shutdown() {
+                            error!("Failed to shutdown detector: {}", e);
+                        } else {
+                            info!("Detector shutdown successful");
                         }
 
                         info!("Experiment cycle complete, ready for next experiment");
@@ -313,7 +319,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
             }
             Err(e) => {
-                error!("Failed to connect to controller: {}. Retrying in 10 seconds...", e);
+                error!(
+                    "Failed to connect to controller: {}. Retrying in 10 seconds...",
+                    e
+                );
             }
         }
 
@@ -355,12 +364,8 @@ async fn handle_frame_local(
     detector: &mut PersistentPythonDetector,
     config: &ExperimentConfig,
 ) -> Result<InferenceMessage, Box<dyn Error + Send + Sync>> {
-    let inference = perform_python_inference_with_counts(
-        &frame,
-        detector,
-        &config.model_name,
-        "local",
-    )?;
+    let inference =
+        perform_python_inference_with_counts(&frame, detector, &config.model_name, "local")?;
 
     Ok(InferenceMessage {
         sequence_id: frame.sequence_id,
@@ -412,7 +417,7 @@ async fn handle_frame_remote(
 
 pub fn load_and_encode_sample(
     frame_number: u64,
-    spec: EncodingSpec
+    spec: EncodingSpec,
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error + Send + Sync>> {
     use std::path::PathBuf;
 

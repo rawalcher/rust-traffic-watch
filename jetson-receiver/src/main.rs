@@ -89,7 +89,7 @@ async fn run_experiment_cycle(
     let detector = tokio::task::spawn_blocking(move || {
         PersistentPythonDetector::new(model_name, INFERENCE_TENSORRT_PATH.to_string())
     })
-        .await??;
+    .await??;
 
     info!("Python detector ready, sending ReadyToStart");
     ctrl_tx
@@ -103,10 +103,10 @@ async fn run_experiment_cycle(
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let inference_config = config.clone();
+    let detector_arc = Arc::new(Mutex::new(detector));
+    let detector_clone = Arc::clone(&detector_arc);
 
     let inference_task = tokio::spawn(async move {
-        let mut local_detector = detector;
-
         loop {
             if *shutdown_rx.borrow() {
                 info!("Inference task received shutdown signal");
@@ -123,7 +123,9 @@ async fn run_experiment_cycle(
                     "Jetson: Starting inference for sequence_id={}",
                     frame_msg.sequence_id
                 );
-                match handle_frame(frame_msg, &mut local_detector, &inference_config).await {
+
+                let mut det = detector_clone.lock().await;
+                match handle_frame(frame_msg, &mut det, &inference_config).await {
                     Ok(result) => {
                         let seq_id = result.sequence_id;
                         if result_tx.send(result).is_err() {
@@ -139,11 +141,7 @@ async fn run_experiment_cycle(
             }
         }
 
-        info!("Shutting down detector...");
-        if let Err(e) = local_detector.shutdown() {
-            error!("Error shutting down detector: {}", e);
-        }
-        info!("Detector shutdown complete");
+        info!("Inference task loop ended");
     });
 
     loop {
@@ -166,7 +164,7 @@ async fn run_experiment_cycle(
 
                         let _ = shutdown_tx.send(true);
 
-                        match tokio::time::timeout(Duration::from_secs(5), inference_task).await {
+                        match tokio::time::timeout(Duration::from_secs(3), inference_task).await {
                             Ok(Ok(())) => {
                                 info!("Inference task completed gracefully");
                             }
@@ -174,10 +172,16 @@ async fn run_experiment_cycle(
                                 error!("Inference task panicked: {:?}", e);
                             }
                             Err(_) => {
-                                error!("Inference task did not complete in 5s");
+                                error!("Inference task did not complete in 3s, forcing shutdown");
                             }
                         }
-
+                        info!("Shutting down Python detector...");
+                        let mut det = detector_arc.lock().await;
+                        if let Err(e) = det.shutdown() {
+                            error!("Failed to shutdown detector: {}", e);
+                        } else {
+                            info!("Detector shutdown successful");
+                        }
                         pi_handler.abort();
 
                         break;
