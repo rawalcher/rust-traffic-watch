@@ -1,7 +1,5 @@
 import io, json, struct, sys
 import numpy as np
-if not hasattr(np, "bool"):
-    np.bool = np.bool_
 import cv2
 
 import tensorrt as trt
