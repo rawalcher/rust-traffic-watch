@@ -1,21 +1,196 @@
+use std::env::args;
 use log::{debug, error, info, warn};
 use shared::codec::ImageCodec;
 use shared::constants::*;
 use shared::network::{read_message, spawn_writer};
-use shared::{
-    current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec,
-    ExperimentConfig, ExperimentMode, Frame, FrameMessage, InferenceMessage, Message,
-    PersistentPythonDetector,
-};
+use shared::{current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec, ExperimentConfig, ExperimentMode, Frame, FrameMessage, ImageCodecKind, ImageResolutionType, InferenceMessage, Message, PersistentPythonDetector};
 use std::error::Error;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, timeout};
 
 const ENCODING_TIMEOUT_MS: u64 = 1000;
+
+
+#[derive(Debug)]
+struct EncodingBenchmark {
+    resolution: ImageResolutionType,
+    codec: ImageCodecKind,
+    tier: Tier,
+    avg_time_ms: u128,
+    min_time_ms: u128,
+    max_time_ms: u128,
+    avg_size_bytes: usize,
+    viable_1fps: bool,
+    viable_5fps: bool,
+    viable_10fps: bool,
+}
+
+fn benchmark_encoding() -> Result<(), Box<dyn Error + Send + Sync>> {
+    println!("Testing encoding performance for all combinations...");
+    println!("Frame budget: 1fps=1000ms, 5fps=200ms, 10fps=100ms\n");
+
+    let resolutions = vec![
+        ImageResolutionType::FHD,
+        ImageResolutionType::HD,
+        ImageResolutionType::LETTERBOX,
+    ];
+
+    let codecs = vec![
+        ImageCodecKind::JpgLossy,
+        ImageCodecKind::PngLossless,
+        ImageCodecKind::WebpLossy,
+        ImageCodecKind::WebpLossless,
+    ];
+
+    let tiers = vec![Tier::T1, Tier::T2, Tier::T3];
+    let test_frames = vec![1u64, 31, 61, 91, 121];
+    let mut results = Vec::new();
+
+    for resolution in &resolutions {
+        for codec in &codecs {
+            for tier in &tiers {
+                let spec = EncodingSpec {
+                    codec: *codec,
+                    tier: *tier,
+                    resolution: *resolution,
+                };
+
+                print!("Testing {:?} / {:?} / {:?}... ", resolution, codec, tier);
+                std::io::Write::flush(&mut std::io::stdout())?;
+
+                let mut times = Vec::new();
+                let mut sizes = Vec::new();
+
+                for frame_num in &test_frames {
+                    let folder_res = res_folder(*resolution);
+                    let folder_codec = codec_folder(*codec);
+                    let ext = codec_ext(*codec);
+
+                    let mut path = PathBuf::from("pi-sender/sample");
+                    path.push(folder_res);
+                    path.push(folder_codec);
+                    path.push(format!("seq3-drone_{:07}.{}", frame_num, ext));
+
+                    if !path.exists() {
+                        eprintln!("\nERROR: Sample file not found: {:?}", path);
+                        continue;
+                    }
+
+                    let start = Instant::now();
+                    match ImageCodec::compress_from_path(&path, spec.clone()) {
+                        Ok(frame) => {
+                            let elapsed = start.elapsed().as_millis();
+                            times.push(elapsed);
+                            sizes.push(frame.frame_data.len());
+                        }
+                        Err(e) => {
+                            eprintln!("\nERROR encoding frame {}: {}", frame_num, e);
+                            continue;
+                        }
+                    }
+                }
+
+                if times.is_empty() {
+                    println!("FAILED");
+                    continue;
+                }
+
+                let avg_time = times.iter().sum::<u128>() / times.len() as u128;
+                let min_time = *times.iter().min().unwrap();
+                let max_time = *times.iter().max().unwrap();
+                let avg_size = sizes.iter().sum::<usize>() / sizes.len();
+
+                let viable_1fps = avg_time <= 1000;
+                let viable_5fps = avg_time <= 200;
+                let viable_10fps = avg_time <= 100;
+
+                println!("{}ms (min={}, max={}) | {} KB | 1fps={} 5fps={} 10fps={}",
+                         avg_time, min_time, max_time,
+                         avg_size / 1024,
+                         viable_1fps,
+                         viable_5fps,
+                         viable_10fps
+                );
+
+                results.push(EncodingBenchmark {
+                    resolution: *resolution,
+                    codec: *codec,
+                    tier: *tier,
+                    avg_time_ms: avg_time,
+                    min_time_ms: min_time,
+                    max_time_ms: max_time,
+                    avg_size_bytes: avg_size,
+                    viable_1fps,
+                    viable_5fps,
+                    viable_10fps,
+                });
+            }
+        }
+    }
+
+    println!("\n=================================================================");
+    println!("                    SUMMARY - 1 FPS (≤1000ms)");
+    println!("=================================================================");
+    print_summary(&results, |r| r.viable_1fps);
+
+    println!("\n=================================================================");
+    println!("                    SUMMARY - 5 FPS (≤200ms)");
+    println!("=================================================================");
+    print_summary(&results, |r| r.viable_5fps);
+
+    println!("\n=================================================================");
+    println!("                    SUMMARY - 10 FPS (≤100ms)");
+    println!("=================================================================");
+    print_summary(&results, |r| r.viable_10fps);
+
+    println!("\n=================================================================");
+    println!("                    DETAILED RESULTS");
+    println!("=================================================================");
+    println!("{:<12} {:<15} {:<6} {:>8} {:>8} {:>8} {:>10} {:>5} {:>5} {:>5}",
+             "Resolution", "Codec", "Tier", "Avg(ms)", "Min(ms)", "Max(ms)", "Size(KB)", "1fps", "5fps", "10fps");
+    println!("-----------------------------------------------------------------");
+
+    for r in &results {
+        println!("{:<12} {:<15} {:<6} {:>8} {:>8} {:>8} {:>10} {:>5} {:>5} {:>5}",
+                 format!("{:?}", r.resolution),
+                 format!("{:?}", r.codec),
+                 format!("{:?}", r.tier),
+                 r.avg_time_ms,
+                 r.min_time_ms,
+                 r.max_time_ms,
+                 r.avg_size_bytes / 1024,
+                 if r.viable_1fps { "✓" } else { "✗" },
+                 if r.viable_5fps { "✓" } else { "✗" },
+                 if r.viable_10fps { "✓" } else { "✗" }
+        );
+    }
+
+    println!("\n=================================================================\n");
+
+    Ok(())
+}
+
+fn print_summary(results: &[EncodingBenchmark], filter: fn(&EncodingBenchmark) -> bool) {
+    let viable: Vec<_> = results.iter().filter(|r| filter(r)).collect();
+
+    if viable.is_empty() {
+        println!("No viable configurations found!");
+        return;
+    }
+
+    println!("\n{} viable configurations:\n", viable.len());
+
+    for r in &viable {
+        println!("  • {:?} / {:?} / {:?}: {}ms avg, {} KB",
+                 r.resolution, r.codec, r.tier, r.avg_time_ms, r.avg_size_bytes / 1024);
+    }
+}
+
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -293,6 +468,11 @@ async fn handle_offload_experiment(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     env_logger::init();
+
+    let args: Vec<String> = args().collect();
+    if args.iter().any(|a| a == "--benchmark-encoding") {
+        return benchmark_encoding();
+    }
 
     loop {
         info!("Connecting to controller at {}", controller_address());
