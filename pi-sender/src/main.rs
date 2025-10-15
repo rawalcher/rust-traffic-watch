@@ -1,196 +1,16 @@
-use std::env::args;
 use log::{debug, error, info, warn};
-use shared::codec::ImageCodec;
 use shared::constants::*;
 use shared::network::{read_message, spawn_writer};
-use shared::{current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec, ExperimentConfig, ExperimentMode, Frame, FrameMessage, ImageCodecKind, ImageResolutionType, InferenceMessage, Message, PersistentPythonDetector};
+use shared::{current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec, ExperimentConfig, ExperimentMode, Frame, FrameMessage, InferenceMessage, Message, PersistentPythonDetector};
 use std::error::Error;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tokio::time::{sleep, timeout};
-
-const ENCODING_TIMEOUT_MS: u64 = 1000;
-
-
-#[derive(Debug)]
-struct EncodingBenchmark {
-    resolution: ImageResolutionType,
-    codec: ImageCodecKind,
-    tier: Tier,
-    avg_time_ms: u128,
-    min_time_ms: u128,
-    max_time_ms: u128,
-    avg_size_bytes: usize,
-    viable_1fps: bool,
-    viable_5fps: bool,
-    viable_10fps: bool,
-}
-
-fn benchmark_encoding() -> Result<(), Box<dyn Error + Send + Sync>> {
-    println!("Testing encoding performance for all combinations...");
-    println!("Frame budget: 1fps=1000ms, 5fps=200ms, 10fps=100ms\n");
-
-    let resolutions = vec![
-        ImageResolutionType::FHD,
-        ImageResolutionType::HD,
-        ImageResolutionType::LETTERBOX,
-    ];
-
-    let codecs = vec![
-        ImageCodecKind::JpgLossy,
-        ImageCodecKind::PngLossless,
-        ImageCodecKind::WebpLossy,
-        ImageCodecKind::WebpLossless,
-    ];
-
-    let tiers = vec![Tier::T1, Tier::T2, Tier::T3];
-    let test_frames = vec![1u64, 31, 61, 91, 121];
-    let mut results = Vec::new();
-
-    for resolution in &resolutions {
-        for codec in &codecs {
-            for tier in &tiers {
-                let spec = EncodingSpec {
-                    codec: *codec,
-                    tier: *tier,
-                    resolution: *resolution,
-                };
-
-                print!("Testing {:?} / {:?} / {:?}... ", resolution, codec, tier);
-                std::io::Write::flush(&mut std::io::stdout())?;
-
-                let mut times = Vec::new();
-                let mut sizes = Vec::new();
-
-                for frame_num in &test_frames {
-                    let folder_res = res_folder(*resolution);
-                    let folder_codec = codec_folder(*codec);
-                    let ext = codec_ext(*codec);
-
-                    let mut path = PathBuf::from("pi-sender/sample");
-                    path.push(folder_res);
-                    path.push(folder_codec);
-                    path.push(format!("seq3-drone_{:07}.{}", frame_num, ext));
-
-                    if !path.exists() {
-                        eprintln!("\nERROR: Sample file not found: {:?}", path);
-                        continue;
-                    }
-
-                    let start = Instant::now();
-                    match ImageCodec::compress_from_path(&path, spec.clone()) {
-                        Ok(frame) => {
-                            let elapsed = start.elapsed().as_millis();
-                            times.push(elapsed);
-                            sizes.push(frame.frame_data.len());
-                        }
-                        Err(e) => {
-                            eprintln!("\nERROR encoding frame {}: {}", frame_num, e);
-                            continue;
-                        }
-                    }
-                }
-
-                if times.is_empty() {
-                    println!("FAILED");
-                    continue;
-                }
-
-                let avg_time = times.iter().sum::<u128>() / times.len() as u128;
-                let min_time = *times.iter().min().unwrap();
-                let max_time = *times.iter().max().unwrap();
-                let avg_size = sizes.iter().sum::<usize>() / sizes.len();
-
-                let viable_1fps = avg_time <= 1000;
-                let viable_5fps = avg_time <= 200;
-                let viable_10fps = avg_time <= 100;
-
-                println!("{}ms (min={}, max={}) | {} KB | 1fps={} 5fps={} 10fps={}",
-                         avg_time, min_time, max_time,
-                         avg_size / 1024,
-                         viable_1fps,
-                         viable_5fps,
-                         viable_10fps
-                );
-
-                results.push(EncodingBenchmark {
-                    resolution: *resolution,
-                    codec: *codec,
-                    tier: *tier,
-                    avg_time_ms: avg_time,
-                    min_time_ms: min_time,
-                    max_time_ms: max_time,
-                    avg_size_bytes: avg_size,
-                    viable_1fps,
-                    viable_5fps,
-                    viable_10fps,
-                });
-            }
-        }
-    }
-
-    println!("\n=================================================================");
-    println!("                    SUMMARY - 1 FPS (≤1000ms)");
-    println!("=================================================================");
-    print_summary(&results, |r| r.viable_1fps);
-
-    println!("\n=================================================================");
-    println!("                    SUMMARY - 5 FPS (≤200ms)");
-    println!("=================================================================");
-    print_summary(&results, |r| r.viable_5fps);
-
-    println!("\n=================================================================");
-    println!("                    SUMMARY - 10 FPS (≤100ms)");
-    println!("=================================================================");
-    print_summary(&results, |r| r.viable_10fps);
-
-    println!("\n=================================================================");
-    println!("                    DETAILED RESULTS");
-    println!("=================================================================");
-    println!("{:<12} {:<15} {:<6} {:>8} {:>8} {:>8} {:>10} {:>5} {:>5} {:>5}",
-             "Resolution", "Codec", "Tier", "Avg(ms)", "Min(ms)", "Max(ms)", "Size(KB)", "1fps", "5fps", "10fps");
-    println!("-----------------------------------------------------------------");
-
-    for r in &results {
-        println!("{:<12} {:<15} {:<6} {:>8} {:>8} {:>8} {:>10} {:>5} {:>5} {:>5}",
-                 format!("{:?}", r.resolution),
-                 format!("{:?}", r.codec),
-                 format!("{:?}", r.tier),
-                 r.avg_time_ms,
-                 r.min_time_ms,
-                 r.max_time_ms,
-                 r.avg_size_bytes / 1024,
-                 if r.viable_1fps { "✓" } else { "✗" },
-                 if r.viable_5fps { "✓" } else { "✗" },
-                 if r.viable_10fps { "✓" } else { "✗" }
-        );
-    }
-
-    println!("\n=================================================================\n");
-
-    Ok(())
-}
-
-fn print_summary(results: &[EncodingBenchmark], filter: fn(&EncodingBenchmark) -> bool) {
-    let viable: Vec<_> = results.iter().filter(|r| filter(r)).collect();
-
-    if viable.is_empty() {
-        println!("No viable configurations found!");
-        return;
-    }
-
-    println!("\n{} viable configurations:\n", viable.len());
-
-    for r in &viable {
-        println!("  • {:?} / {:?} / {:?}: {}ms avg, {} KB",
-                 r.resolution, r.codec, r.tier, r.avg_time_ms, r.avg_size_bytes / 1024);
-    }
-}
-
+use tokio::time::sleep;
+use std::sync::Arc;
+use image::GenericImageView;
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -200,7 +20,7 @@ async fn run_experiment_cycle(
         Ok(c) => c,
         Err(e) => {
             if e.to_string().contains("Shutdown before experiment") {
-                return Ok(false); // Clean shutdown, exit main loop
+                return Ok(false);
             }
             return Err(e);
         }
@@ -306,17 +126,10 @@ async fn handle_local_experiment(
                         let seq_id = timing.sequence_id;
                         let frame_number = timing.frame_number;
 
-                        let config_clone = config.clone();
-                        let pending_frame_clone = Arc::clone(&pending_frame);
-
-                        let encoding_future = tokio::task::spawn(async move {
-                            load_and_encode_sample(frame_number, config_clone.encoding_spec.clone())
-                        });
-
-                        match timeout(Duration::from_millis(ENCODING_TIMEOUT_MS), encoding_future).await {
-                            Ok(Ok(Ok((frame_data, width, height)))) => {
+                        match handle_frame(frame_number, config.encoding_spec.clone()) {
+                            Ok((frame_data, width, height)) => {
                                 debug!(
-                                    "Prepared frame {} ({:?}, tier={:?}, res={:?}) -> {} bytes",
+                                    "Loaded frame {} ({:?}, tier={:?}, res={:?}) -> {} bytes",
                                     frame_number,
                                     config.encoding_spec.codec,
                                     config.encoding_spec.tier,
@@ -335,7 +148,7 @@ async fn handle_local_experiment(
                                     },
                                 };
 
-                                let mut pending = pending_frame_clone.lock().await;
+                                let mut pending = pending_frame.lock().await;
                                 let old_seq = pending.as_ref().map(|f| f.sequence_id);
                                 *pending = Some(frame_msg);
 
@@ -344,17 +157,8 @@ async fn handle_local_experiment(
                                 }
                                 info!("Pi: Updated pending frame to sequence_id={}", seq_id);
                             }
-                            Ok(Ok(Err(e))) => {
-                                error!("Failed to encode frame {}: {}", frame_number, e);
-                            }
-                            Ok(Err(e)) => {
-                                error!("Encoding task panicked for frame {}: {:?}", frame_number, e);
-                            }
-                            Err(_) => {
-                                warn!(
-                                    "Frame {} encoding TIMEOUT (>{}ms) - NOT VIABLE FOR LIVE PROCESSING",
-                                    frame_number, ENCODING_TIMEOUT_MS
-                                );
+                            Err(e) => {
+                                error!("Failed to load frame {}: {}", frame_number, e);
                             }
                         }
                     }
@@ -429,28 +233,12 @@ async fn handle_offload_experiment(
     loop {
         match read_message(ctrl_reader).await? {
             Message::Pulse(timing) => {
-                let config_clone = config.clone();
-                let jetson_tx_clone = jetson_tx.clone();
-
-                let encoding_future = tokio::spawn(async move {
-                    handle_frame_remote(timing, &config_clone, &jetson_tx_clone).await
-                });
-
-                match timeout(Duration::from_millis(ENCODING_TIMEOUT_MS), encoding_future).await {
-                    Ok(Ok(Ok(()))) => {
-                        // Success - frame encoded and sent
+                match handle_frame_remote(timing, &config, &jetson_tx).await {
+                    Ok(()) => {
+                        // Frame loaded and sent successfully
                     }
-                    Ok(Ok(Err(e))) => {
+                    Err(e) => {
                         error!("Failed to handle remote frame: {}", e);
-                    }
-                    Ok(Err(e)) => {
-                        error!("Remote frame task panicked: {:?}", e);
-                    }
-                    Err(_) => {
-                        warn!(
-                            "Remote frame encoding TIMEOUT (>{}ms) - NOT VIABLE FOR LIVE PROCESSING",
-                            ENCODING_TIMEOUT_MS
-                        );
                     }
                 }
             }
@@ -469,11 +257,6 @@ async fn handle_offload_experiment(
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     env_logger::init();
 
-    let args: Vec<String> = args().collect();
-    if args.iter().any(|a| a == "--benchmark-encoding") {
-        return benchmark_encoding();
-    }
-
     loop {
         info!("Connecting to controller at {}", controller_address());
 
@@ -487,7 +270,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     .await
                     .ok();
 
-                // Keep running experiments until connection fails
                 loop {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
                         Ok(true) => {
@@ -570,10 +352,10 @@ async fn handle_frame_remote(
 
     let frame_number = timing.frame_number;
     let (frame_data, width, height) =
-        load_and_encode_sample(frame_number, config.encoding_spec.clone())?;
+        handle_frame(frame_number, config.encoding_spec.clone())?;
 
     debug!(
-        "Prepared frame {} for offload ({:?}, tier={:?}, res={:?}) -> {} bytes",
+        "Loaded frame {} for offload ({:?}, tier={:?}, res={:?}) -> {} bytes",
         frame_number,
         config.encoding_spec.codec,
         config.encoding_spec.tier,
@@ -602,12 +384,10 @@ async fn handle_frame_remote(
     Ok(())
 }
 
-pub fn load_and_encode_sample(
+pub fn handle_frame(
     frame_number: u64,
     spec: EncodingSpec,
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error + Send + Sync>> {
-    use std::path::PathBuf;
-
     let folder_res = res_folder(spec.resolution);
     let folder_codec = codec_folder(spec.codec);
     let ext = codec_ext(spec.codec);
@@ -618,6 +398,14 @@ pub fn load_and_encode_sample(
     path.push(folder_codec);
     path.push(format!("seq3-drone_{:07}.{}", frame_number, ext));
 
-    let frame = ImageCodec::compress_from_path(&path, spec)?;
-    Ok((frame.frame_data, frame.width, frame.height))
+    if !path.exists() {
+        return Err(format!("Frame file not found: {:?}", path).into());
+    }
+
+    let frame_data = std::fs::read(&path)?;
+
+    let img = image::load_from_memory(&frame_data)?;
+    let (width, height) = img.dimensions();
+
+    Ok((frame_data, width, height))
 }
