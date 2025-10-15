@@ -1,8 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::error::Error;
+use std::sync::{Arc, Mutex};
 use image::{DynamicImage, imageops::FilterType, GenericImageView};
 use anyhow::Context as AnyhowContext;
+use rayon::prelude::*;
 use shared::codec::ImageCodec;
 use shared::constants::{Tier, res_folder, codec_folder, codec_ext};
 use shared::{ImageCodecKind, ImageResolutionType, EncodingSpec};
@@ -30,7 +32,7 @@ impl ConversionStats {
 
     fn report_success(&mut self) {
         self.succeeded += 1;
-        if self.succeeded % 10 == 0 || self.succeeded == self.total {
+        if self.succeeded % 50 == 0 || self.succeeded == self.total {
             println!("Progress: {}/{} ({:.1}%)",
                      self.succeeded, self.total,
                      (self.succeeded as f32 / self.total as f32) * 100.0
@@ -226,28 +228,36 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     fs::create_dir_all("pi-sender/sample")?;
 
-    let mut stats = ConversionStats::new(total_conversions);
+    let stats = Arc::new(Mutex::new(ConversionStats::new(total_conversions)));
 
-    println!("Starting batch conversion...\n");
+    println!("Starting parallel batch conversion...\n");
 
+    let mut work_items = Vec::new();
     for resolution in &resolutions {
         for codec in &codecs {
             for tier in &tiers {
-                println!("Processing: {:?} / {:?} / {:?}", resolution, codec, tier);
-
                 for task in &tasks {
-                    match process_single_image(task, *resolution, *codec, *tier) {
-                        Ok(_) => stats.report_success(),
-                        Err(e) => {
-                            eprintln!("  Failed to process {:?}: {}", task.input_path, e);
-                            stats.report_failure();
-                        }
-                    }
+                    work_items.push((task, *resolution, *codec, *tier));
                 }
             }
         }
     }
 
+    work_items.par_iter().for_each(|(task, resolution, codec, tier)| {
+        match process_single_image(task, *resolution, *codec, *tier) {
+            Ok(_) => {
+                let mut stats = stats.lock().unwrap();
+                stats.report_success();
+            }
+            Err(e) => {
+                eprintln!("  Failed to process {:?}: {}", task.input_path, e);
+                let mut stats = stats.lock().unwrap();
+                stats.report_failure();
+            }
+        }
+    });
+
+    let stats = stats.lock().unwrap();
     stats.print_summary();
 
     if stats.failed > 0 {

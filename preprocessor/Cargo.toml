@@ -7,3 +7,4 @@ edition = "2021"
 image = "0.25.8"
 shared = { path = "../shared" }
 anyhow = "1.0.100"
+rayon = "1.11.0"
