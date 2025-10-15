@@ -126,7 +126,7 @@ async fn handle_local_experiment(
                         let seq_id = timing.sequence_id;
                         let frame_number = timing.frame_number;
 
-                        match handle_frame(frame_number, config.encoding_spec.clone()) {
+                        match load_frame(frame_number, config.encoding_spec.clone()) {
                             Ok((frame_data, width, height)) => {
                                 debug!(
                                     "Loaded frame {} ({:?}, tier={:?}, res={:?}) -> {} bytes",
@@ -352,7 +352,7 @@ async fn handle_frame_remote(
 
     let frame_number = timing.frame_number;
     let (frame_data, width, height) =
-        handle_frame(frame_number, config.encoding_spec.clone())?;
+        load_frame(frame_number, config.encoding_spec.clone())?;
 
     debug!(
         "Loaded frame {} for offload ({:?}, tier={:?}, res={:?}) -> {} bytes",
@@ -384,19 +384,20 @@ async fn handle_frame_remote(
     Ok(())
 }
 
-pub fn handle_frame(
+pub fn load_frame(
     frame_number: u64,
     spec: EncodingSpec,
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error + Send + Sync>> {
     let folder_res = res_folder(spec.resolution);
     let folder_codec = codec_folder(spec.codec);
     let ext = codec_ext(spec.codec);
+    let tier_suffix = format!("{:?}", spec.tier); // "T1", "T2", or "T3"
 
-    // pi-sender/sample/{resolution}/{codec}/seq3-drone_{:07}.{ext}
+    // pi-sender/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}
     let mut path = PathBuf::from("pi-sender/sample");
     path.push(folder_res);
     path.push(folder_codec);
-    path.push(format!("seq3-drone_{:07}.{}", frame_number, ext));
+    path.push(format!("seq3-drone_{:07}_{}.{}", frame_number, tier_suffix, ext));
 
     if !path.exists() {
         return Err(format!("Frame file not found: {:?}", path).into());

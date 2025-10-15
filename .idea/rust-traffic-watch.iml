@@ -11,6 +11,8 @@
       <sourceFolder url="file://$MODULE_DIR$/pi-sender/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/shared/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/controller/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/preprocessor/Cargo/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/preprocessor/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
