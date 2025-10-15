@@ -1,84 +1,182 @@
-use crate::constants::PYTHON_VENV_PATH;
 use crate::types::*;
 use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PythonDetectionResult {
-    pub detections: Vec<Detection>,
-    pub image_width: u32,
-    pub image_height: u32,
-    pub counts: ObjectCounts,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct PythonErrorResult {
-    pub error: String,
-    pub detections: Vec<Detection>,
-    pub image_width: u32,
-    pub image_height: u32,
-    pub counts: ObjectCounts,
-}
+use std::time::Duration;
 
 pub struct PersistentPythonDetector {
     process: Option<Child>,
+    state: DetectorState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DetectorState {
+    Ready,
+    ShuttingDown,
+    Terminated,
 }
 
 impl PersistentPythonDetector {
     pub fn new(model_name: String, script_path: String) -> Result<Self, String> {
         debug!("Launching Python detector with model '{}'", model_name);
 
-        let mut process = Command::new(PYTHON_VENV_PATH)
+        let mut process = Command::new("python3")
             .arg(script_path)
             .arg(&model_name)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Spawn failed: {}", e))?;
 
-        let stdout = process.stdout.as_mut().ok_or("Missing stdout")?;
-        let reader = BufReader::new(stdout);
+        let ready = Self::wait_for_ready(&mut process, Duration::from_secs(600))?;
 
-        for line in reader.lines().flatten() {
-            let trimmed = line.trim();
-            if trimmed.contains("READY") {
-                debug!("Python process is ready");
-                return Ok(Self {
-                    process: Some(process),
-                });
-            } else {
-                debug!("Python output: {}", trimmed);
-            }
+        if !ready {
+            let _ = process.kill();
+            let _ = process.wait();
+            return Err("Python process did not become ready in time".into());
         }
 
-        let _ = process.kill();
-        let _ = process.wait();
-        Err("Did not receive READY from Python".into())
+        debug!("Python process is ready (PID: {})", process.id());
+
+        Ok(Self {
+            process: Some(process),
+            state: DetectorState::Ready,
+        })
+    }
+
+    fn wait_for_ready(process: &mut Child, timeout: Duration) -> Result<bool, String> {
+        use std::time::Instant;
+
+        let stdout = process.stdout.as_mut().ok_or("Missing stdout")?;
+        let mut reader = BufReader::new(stdout);
+        let start = Instant::now();
+
+        let mut line = String::new();
+        loop {
+            if start.elapsed() > timeout {
+                return Ok(false);
+            }
+
+            match reader.read_line(&mut line) {
+                Ok(0) => return Err("Python process closed stdout before READY".into()),
+                Ok(_) => {
+                    if line.trim().contains("READY") {
+                        return Ok(true);
+                    }
+                    line.clear();
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(e) => return Err(format!("Failed to read from Python: {}", e)),
+            }
+        }
     }
 
     pub fn detect_objects(&mut self, image_bytes: &[u8]) -> Result<PythonDetectionResult, String> {
+        if self.state != DetectorState::Ready {
+            return Err(format!("Detector not ready (state: {:?})", self.state));
+        }
+
         self.send_image(image_bytes)?;
         self.receive_response()
     }
 
+    pub fn shutdown(&mut self) -> Result<(), String> {
+        if self.state == DetectorState::Terminated {
+            return Ok(());
+        }
+
+        self.state = DetectorState::ShuttingDown;
+
+        if let Some(mut process) = self.process.take() {
+            let pid = process.id();
+            debug!("Shutting down Python detector (PID: {})", pid);
+
+            // Step 1: Close stdin to signal shutdown
+            drop(process.stdin.take());
+
+            // Step 2: Give process time to finish current work (up to 5 seconds)
+            let wait_result = Self::wait_with_timeout(&mut process, Duration::from_secs(5));
+
+            match wait_result {
+                Ok(status) => {
+                    debug!("Python process exited cleanly: {:?}", status);
+                    self.state = DetectorState::Terminated;
+                    Ok(())
+                }
+                Err(_) => {
+                    // Step 3: Force kill if it didn't exit gracefully
+                    warn!("Python process (PID: {}) did not exit gracefully, force killing", pid);
+
+                    if let Err(e) = process.kill() {
+                        error!("Failed to kill process: {}", e);
+                        self.state = DetectorState::Terminated;
+                        return Err(format!("Failed to kill process: {}", e));
+                    }
+
+                    // Wait for kill to complete
+                    match process.wait() {
+                        Ok(status) => {
+                            warn!("Python process forcefully terminated: {:?}", status);
+                            self.state = DetectorState::Terminated;
+                            Ok(())
+                        }
+                        Err(e) => {
+                            error!("Failed to wait after kill: {}", e);
+                            self.state = DetectorState::Terminated;
+                            Err(format!("Failed to wait after kill: {}", e))
+                        }
+                    }
+                }
+            }
+        } else {
+            self.state = DetectorState::Terminated;
+            Ok(())
+        }
+    }
+
+    fn wait_with_timeout(process: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus, ()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        loop {
+            match process.try_wait() {
+                Ok(Some(status)) => return Ok(status),
+                Ok(None) => {
+                    if start.elapsed() > timeout {
+                        return Err(());
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(_) => return Err(()),
+            }
+        }
+    }
+
+    pub fn is_alive(&mut self) -> bool {
+        self.state == DetectorState::Ready &&
+            self.process.as_mut()
+                .and_then(|p| p.try_wait().ok())
+                .map(|s| s.is_none())
+                .unwrap_or(false)
+    }
+
     fn send_image(&mut self, image_bytes: &[u8]) -> Result<(), String> {
         let process = self.process.as_mut().ok_or("Process not running")?;
-        let stdin = process.stdin.as_mut().ok_or("Missing stdin".to_string())?;
+        let stdin = process.stdin.as_mut().ok_or("Missing stdin")?;
 
-        stdin
-            .write_all(&(image_bytes.len() as u32).to_le_bytes())
-            .map_err(|e| format!("Failed to write length: {}", e))?;
+        stdin.write_all(&(image_bytes.len() as u32).to_le_bytes())
+            .map_err(|e| format!("Write length failed: {}", e))?;
 
-        stdin
-            .write_all(image_bytes)
-            .map_err(|e| format!("Failed to write image: {}", e))?;
+        stdin.write_all(image_bytes)
+            .map_err(|e| format!("Write image failed: {}", e))?;
 
-        stdin
-            .flush()
-            .map_err(|e| format!("Failed to flush: {}", e))?;
+        stdin.flush()
+            .map_err(|e| format!("Flush failed: {}", e))?;
 
         Ok(())
     }
@@ -88,18 +186,17 @@ impl PersistentPythonDetector {
         let stdout = process.stdout.as_mut().ok_or("Missing stdout")?;
 
         let mut length_buf = [0u8; 4];
-        stdout
-            .read_exact(&mut length_buf)
-            .map_err(|e| format!("Failed to read response length: {}", e))?;
+        stdout.read_exact(&mut length_buf)
+            .map_err(|e| format!("Read length failed: {}", e))?;
 
         let length = u32::from_le_bytes(length_buf) as usize;
-
         let mut buf = vec![0u8; length];
-        stdout
-            .read_exact(&mut buf)
-            .map_err(|e| format!("Failed to read response data: {}", e))?;
 
-        let text = String::from_utf8(buf).map_err(|e| format!("Invalid UTF-8: {}", e))?;
+        stdout.read_exact(&mut buf)
+            .map_err(|e| format!("Read data failed: {}", e))?;
+
+        let text = String::from_utf8(buf)
+            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
         serde_json::from_str::<PythonDetectionResult>(&text).or_else(|_| {
             serde_json::from_str::<PythonErrorResult>(&text)
@@ -107,85 +204,13 @@ impl PersistentPythonDetector {
                 .and_then(|err| Err(err.error))
         })
     }
-
-    pub fn shutdown(&mut self) -> Result<(), String> {
-        if let Some(mut process) = self.process.take() {
-            let pid = process.id();
-            debug!("Shutting down Python detector (PID: {})", pid);
-
-            drop(process.stdin.take());
-
-            debug!("Waiting for Python process to finish current work...");
-            for i in 0..100 {
-                match process.try_wait() {
-                    Ok(Some(status)) => {
-                        debug!("Python process exited cleanly with status: {:?}", status);
-                        return Ok(());
-                    }
-                    Ok(None) => {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                        if i > 0 && i % 10 == 0 {
-                            debug!(
-                                "Still waiting for Python process to finish... ({}s/10s)",
-                                i / 10
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Error checking process status: {}", e);
-                        break;
-                    }
-                }
-            }
-
-            warn!(
-                "Python process (PID: {}) did not exit after 10s, force killing",
-                pid
-            );
-            if let Err(e) = process.kill() {
-                error!("Failed to kill process: {}", e);
-                return Err(format!("Failed to kill process: {}", e));
-            }
-
-            match process.wait() {
-                Ok(status) => {
-                    warn!("Python process forcefully killed with status: {:?}", status);
-                    Ok(())
-                }
-                Err(e) => {
-                    error!("Failed to wait for killed process: {}", e);
-                    Err(format!("Failed to wait for process: {}", e))
-                }
-            }
-        } else {
-            debug!("No Python process to shutdown");
-            Ok(())
-        }
-    }
-
-    pub fn is_alive(&mut self) -> bool {
-        if let Some(ref mut process) = self.process {
-            match process.try_wait() {
-                Ok(None) => true,
-                Ok(Some(_)) => {
-                    self.process = None;
-                    false
-                }
-                Err(_) => false,
-            }
-        } else {
-            false
-        }
-    }
 }
 
 impl Drop for PersistentPythonDetector {
     fn drop(&mut self) {
-        if self.process.is_some() {
-            error!("!!! PersistentPythonDetector dropped without explicit shutdown !!!");
-            if let Err(e) = self.shutdown() {
-                error!("Error during PersistentPythonDetector drop: {}", e);
-            }
+        if self.state != DetectorState::Terminated {
+            error!("PersistentPythonDetector dropped without explicit shutdown!");
+            let _ = self.shutdown();
         }
     }
 }
@@ -213,4 +238,21 @@ pub fn perform_python_inference_with_counts(
         model_name: model_name.to_string(),
         experiment_mode: experiment_mode.to_string(),
     })
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PythonDetectionResult {
+    pub detections: Vec<Detection>,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub counts: ObjectCounts,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PythonErrorResult {
+    pub error: String,
+    pub detections: Vec<Detection>,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub counts: ObjectCounts,
 }

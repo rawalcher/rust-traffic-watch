@@ -1,16 +1,19 @@
+use image::GenericImageView;
 use log::{debug, error, info, warn};
 use shared::constants::*;
+use shared::experiment_manager::ExperimentManager;
 use shared::network::{read_message, spawn_writer};
-use shared::{current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec, ExperimentConfig, ExperimentMode, Frame, FrameMessage, InferenceMessage, Message, PersistentPythonDetector};
+use shared::{
+    current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, EncodingSpec,
+    ExperimentConfig, ExperimentMode, Frame, FrameMessage, InferenceMessage, Message,
+};
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::sleep;
-use std::sync::Arc;
-use image::GenericImageView;
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -43,9 +46,7 @@ async fn handle_local_experiment(
     ctrl_tx: mpsc::Sender<Message>,
     config: ExperimentConfig,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let pending_frame: Arc<Mutex<Option<FrameMessage>>> = Arc::new(Mutex::new(None));
-
-    let detector = PersistentPythonDetector::new(
+    let mut manager = ExperimentManager::new(
         config.model_name.clone(),
         INFERENCE_PYTORCH_PATH.to_string(),
     )?;
@@ -57,76 +58,65 @@ async fn handle_local_experiment(
     wait_for_experiment_start(ctrl_reader).await?;
     info!("Experiment started. Processing frames locally...");
 
-    let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let (result_tx, mut result_rx) = mpsc::unbounded_channel();
 
-    let pending_frame_inference = Arc::clone(&pending_frame);
-    let inference_config = config.clone();
-    let ctrl_tx2 = ctrl_tx.clone();
-
-    let detector_arc = Arc::new(Mutex::new(detector));
-    let detector_clone = Arc::clone(&detector_arc);
-
-    let inference_task = tokio::spawn(async move {
-        loop {
-            if *shutdown_rx.borrow() {
-                info!("Inference task received shutdown signal");
-                break;
-            }
-
-            let frame = {
-                let mut pending = pending_frame_inference.lock().await;
-                pending.take()
-            };
-
-            if let Some(frame_msg) = frame {
-                if *shutdown_rx.borrow() {
-                    info!("Inference task: Dropping frame {} due to shutdown", frame_msg.sequence_id);
-                    break;
-                }
-
-                info!(
-                    "Pi: Starting local inference for sequence_id={}",
-                    frame_msg.sequence_id
-                );
-
-                let mut det = detector_clone.lock().await;
-                match handle_frame_local(frame_msg, &mut det, &inference_config).await {
-                    Ok(result) => {
-                        let seq_id = result.sequence_id;
-                        if result_tx.send(result).is_err() {
-                            info!("Result channel closed, inference task exiting");
-                            break;
-                        }
-                        info!("Pi: Completed local inference for sequence_id={}", seq_id);
-                    }
-                    Err(e) => {
-                        error!("Failed to process frame locally: {}", e);
-                    }
-                }
+    manager.start_inference(
+        result_tx,
+        config.clone(),
+        |frame, detector, cfg| async move {
+            let mut det_opt = detector.lock().await;
+            if let Some(ref mut det) = *det_opt {
+                perform_python_inference_with_counts(&frame, det, &cfg.model_name, "local")
+                    .map(|inference| InferenceMessage {
+                        sequence_id: frame.sequence_id,
+                        timing: frame.timing,
+                        inference,
+                    })
+                    .map_err(|e| -> Box<dyn Error + Send + Sync> { e.into() })
             } else {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                Err("Detector unavailable".into())
             }
-        }
-        info!("Inference task loop ended");
-    });
+        },
+    );
 
+    let result = run_local_experiment_loop(
+        ctrl_reader,
+        ctrl_tx.clone(),
+        &mut result_rx,
+        &manager,
+        &config,
+    )
+    .await;
+
+    if let Err(e) = manager.shutdown().await {
+        error!("Manager shutdown error: {}", e);
+    }
+
+    result
+}
+
+async fn run_local_experiment_loop(
+    ctrl_reader: &mut OwnedReadHalf,
+    ctrl_tx: mpsc::Sender<Message>,
+    result_rx: &mut mpsc::UnboundedReceiver<InferenceMessage>,
+    manager: &ExperimentManager,
+    config: &ExperimentConfig,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         tokio::select! {
             Some(result) = result_rx.recv() => {
-                if ctrl_tx2.send(Message::Result(result)).await.is_err() {
+                if ctrl_tx.send(Message::Result(result)).await.is_err() {
                     error!("Controller writer channel closed");
-                    break;
+                    return Err("Controller disconnected".into());
                 }
             }
             msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Pulse(mut timing) => {
                         timing.pi_capture_start = Some(current_timestamp_micros());
-                        let seq_id = timing.sequence_id;
                         let frame_number = timing.frame_number;
 
-                        match load_frame(frame_number, config.encoding_spec.clone()) {
+                        match handle_frame(frame_number, config.encoding_spec.clone()) {
                             Ok((frame_data, width, height)) => {
                                 debug!(
                                     "Loaded frame {} ({:?}, tier={:?}, res={:?}) -> {} bytes",
@@ -148,61 +138,21 @@ async fn handle_local_experiment(
                                     },
                                 };
 
-                                let mut pending = pending_frame.lock().await;
-                                let old_seq = pending.as_ref().map(|f| f.sequence_id);
-                                *pending = Some(frame_msg);
-
-                                if let Some(old) = old_seq {
-                                    debug!("Pi: Dropped frame {} for newer frame {}", old, seq_id);
-                                }
-                                info!("Pi: Updated pending frame to sequence_id={}", seq_id);
+                                manager.update_pending_frame(frame_msg).await;
                             }
-                            Err(e) => {
-                                error!("Failed to load frame {}: {}", frame_number, e);
-                            }
+                            Err(e) => error!("Failed to load frame {}: {}", frame_number, e),
                         }
                     }
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received, cleaning up...");
-                        {
-                            let mut pending = pending_frame.lock().await;
-                            *pending = None;
-                        }
-
-                        let _ = shutdown_tx.send(true);
-
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-
-                        info!("Shutting down Python detector (will wait for in-flight inference)...");
-                        let mut det = detector_arc.lock().await;
-                        if let Err(e) = det.shutdown() {
-                            error!("Failed to shutdown detector: {}", e);
-                        } else {
-                            info!("Detector shutdown successful");
-                        }
-
-                        match tokio::time::timeout(Duration::from_secs(1), inference_task).await {
-                            Ok(Ok(())) => {
-                                info!("Inference task completed");
-                            }
-                            Ok(Err(e)) => {
-                                error!("Inference task panicked: {:?}", e);
-                            }
-                            Err(_) => {
-                                warn!("Inference task did not exit in 1s (already stopped)");
-                            }
-                        }
-
-                        info!("Experiment cycle complete, ready for next experiment");
-                        break;
+                        info!("Shutdown received");
+                        return Ok(());
                     }
+
                     msg => warn!("Unexpected message during experiment: {:?}", msg),
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 async fn handle_offload_experiment(
@@ -328,21 +278,6 @@ async fn wait_for_experiment_start(
     }
 }
 
-async fn handle_frame_local(
-    frame: FrameMessage,
-    detector: &mut PersistentPythonDetector,
-    config: &ExperimentConfig,
-) -> Result<InferenceMessage, Box<dyn Error + Send + Sync>> {
-    let inference =
-        perform_python_inference_with_counts(&frame, detector, &config.model_name, "local")?;
-
-    Ok(InferenceMessage {
-        sequence_id: frame.sequence_id,
-        timing: frame.timing,
-        inference,
-    })
-}
-
 async fn handle_frame_remote(
     mut timing: shared::TimingMetadata,
     config: &ExperimentConfig,
@@ -351,8 +286,7 @@ async fn handle_frame_remote(
     timing.pi_capture_start = Some(current_timestamp_micros());
 
     let frame_number = timing.frame_number;
-    let (frame_data, width, height) =
-        load_frame(frame_number, config.encoding_spec.clone())?;
+    let (frame_data, width, height) = handle_frame(frame_number, config.encoding_spec.clone())?;
 
     debug!(
         "Loaded frame {} for offload ({:?}, tier={:?}, res={:?}) -> {} bytes",
@@ -384,20 +318,19 @@ async fn handle_frame_remote(
     Ok(())
 }
 
-pub fn load_frame(
+pub fn handle_frame(
     frame_number: u64,
     spec: EncodingSpec,
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error + Send + Sync>> {
     let folder_res = res_folder(spec.resolution);
     let folder_codec = codec_folder(spec.codec);
     let ext = codec_ext(spec.codec);
-    let tier_suffix = format!("{:?}", spec.tier); // "T1", "T2", or "T3"
 
-    // pi-sender/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}
+    // pi-sender/sample/{resolution}/{codec}/seq3-drone_{:07}.{ext}
     let mut path = PathBuf::from("pi-sender/sample");
     path.push(folder_res);
     path.push(folder_codec);
-    path.push(format!("seq3-drone_{:07}_{}.{}", frame_number, tier_suffix, ext));
+    path.push(format!("seq3-drone_{:07}.{}", frame_number, ext));
 
     if !path.exists() {
         return Err(format!("Frame file not found: {:?}", path).into());
