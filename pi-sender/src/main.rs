@@ -160,24 +160,39 @@ async fn handle_offload_experiment(
     ctrl_tx: mpsc::Sender<Message>,
     config: ExperimentConfig,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Connecting to Jetson on {}", jetson_address());
-    sleep(Duration::from_secs(2)).await;
+    info!("Attempting to connect to Jetson on {}", jetson_address());
 
-    let jetson_stream = TcpStream::connect(jetson_address()).await?;
-    let (_jetson_reader, jetson_writer) = jetson_stream.into_split();
-    let jetson_tx = spawn_writer(jetson_writer);
+    let jetson_tx = loop {
+        match TcpStream::connect(jetson_address()).await {
+            Ok(stream) => {
+                info!("Successfully connected to Jetson");
+                let (_jetson_reader, jetson_writer) = stream.into_split();
+                let tx = spawn_writer(jetson_writer);
 
-    jetson_tx
-        .send(Message::Hello(shared::types::DeviceId::Pi))
-        .await
-        .ok();
+                tx.send(Message::Hello(shared::types::DeviceId::Pi))
+                    .await
+                    .ok();
+
+                break tx;
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to connect to Jetson: {}. Retrying in 2 seconds...",
+                    e
+                );
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+    };
+
+    info!("Jetson connection established");
 
     ctrl_tx
         .send(Message::Control(ControlMessage::ReadyToStart))
         .await
         .ok();
-    wait_for_experiment_start(ctrl_reader).await?;
 
+    wait_for_experiment_start(ctrl_reader).await?;
     info!("Experiment started. Forwarding frames to Jetson...");
 
     loop {
