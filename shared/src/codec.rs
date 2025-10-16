@@ -120,3 +120,26 @@ fn encode_webp_lossy(img: &DynamicImage, tier: Tier) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("libwebp lossy encode failed: {:?}", e))?;
     Ok(mem.to_vec())
 }
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn benchmark_encoding() {
+        let img = DynamicImage::new_rgb8(1920, 1080);
+
+        for _ in 0..3 {
+            let _ = encode_jpeg(&img, Tier::T2);
+        }
+
+        let start = Instant::now();
+        for _ in 0..10 {
+            let _ = encode_jpeg(&img, Tier::T2);
+        }
+        let elapsed = start.elapsed();
+
+        println!("Average JPEG encode time: {:?}", elapsed / 10);
+    }
+}

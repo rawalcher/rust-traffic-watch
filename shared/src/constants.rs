@@ -3,14 +3,14 @@ use crate::{ImageCodecKind, ImageResolutionType};
 pub const CONTROLLER_PORT: u16 = 9090;
 pub const JETSON_PORT: u16 = 9092;
 
-pub const CONTROLLER_ADDRESS: &str = "10.0.0.20";
-pub const JETSON_ADDRESS: &str = "10.0.0.21";
-pub const PI_ADDRESS: &str = "10.0.0.25";
+pub const CONTROLLER_ADDRESS: &str = "localhost";
+pub const JETSON_ADDRESS: &str = "localhost";
+pub const PI_ADDRESS: &str = "localhost";
 
 // echo 120 | sudo tee /sys/devices/pwm-fan/target_pwm
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
-pub const DEFAULT_DURATION_SECONDS: u64 = 90;
+pub const DEFAULT_DURATION_SECONDS: u64 = 10;
 pub const DEFAULT_SEND_FPS: f32 = 1.0;
 pub const SOURCE_FPS: f32 = 30.0;
 
@@ -147,5 +147,13 @@ pub fn codec_ext(codec: ImageCodecKind) -> &'static str {
         ImageCodecKind::JpgLossy => "jpg",
         ImageCodecKind::PngLossless => "png",
         ImageCodecKind::WebpLossy | ImageCodecKind::WebpLossless => "webp",
+    }
+}
+
+pub fn image_tier(tier: Tier) -> &'static str {
+    match tier {
+        Tier::T1 => "T1",
+        Tier::T2 => "T2",
+        Tier::T3 => "T3"
     }
 }
