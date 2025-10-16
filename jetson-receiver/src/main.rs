@@ -50,6 +50,8 @@ async fn run_experiment_cycle(
     }
 
     let (mut pi_reader, _pi_writer) = pi_stream.into_split();
+    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<FrameMessage>();
+    let frame_tx_clone = frame_tx.clone();
 
     let pi_handler = tokio::spawn(async move {
         loop {
@@ -57,6 +59,15 @@ async fn run_experiment_cycle(
                 Ok(Message::Frame(frame)) => {
                     let seq_id = frame.sequence_id;
                     info!("Jetson received frame from Pi: sequence_id={}", seq_id);
+
+                    if frame_tx_clone.send(frame).is_err() {
+                        error!("Failed to forward frame to processing pipeline");
+                        break;
+                    }
+                }
+                Ok(Message::Control(ControlMessage::Shutdown)) => {
+                    info!("Pi sent shutdown");
+                    break;
                 }
                 Ok(other) => debug!("Pi sent: {:?}", other),
                 Err(_) => {
@@ -77,7 +88,6 @@ async fn run_experiment_cycle(
     info!("Experiment started. Processing frames...");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
-    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<FrameMessage>();
 
     {
         let manager_clone = Arc::clone(&manager);
@@ -113,16 +123,18 @@ async fn run_experiment_cycle(
     }
 
     let manager_clone = Arc::clone(&manager);
-    tokio::spawn(async move {
+    let frame_forwarder = tokio::spawn(async move {
         while let Some(frame) = frame_rx.recv().await {
             let mgr = manager_clone.lock().await;
             mgr.update_pending_frame(frame).await;
         }
+        debug!("Frame forwarder task ended");
     });
 
     loop {
         tokio::select! {
             Some(result) = result_rx.recv() => {
+                info!("Sending result for sequence_id {} back to controller", result.sequence_id);
                 if ctrl_tx.send(Message::Result(result)).await.is_err() {
                     error!("Controller writer channel closed");
                     break;
@@ -131,13 +143,15 @@ async fn run_experiment_cycle(
             msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Frame(frame) => {
-                        warn!("Unexpected frame on controller channel");
+                        warn!("Unexpected frame on controller channel, forwarding to pipeline");
                         let _ = frame_tx.send(frame);
                     }
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received, beginning teardown");
+                        info!("Shutdown received from controller, beginning teardown");
 
+                        drop(frame_tx);
                         pi_handler.abort();
+                        let _ = frame_forwarder.await;
 
                         let mut mgr = manager.lock().await;
                         if let Err(e) = mgr.shutdown().await {
