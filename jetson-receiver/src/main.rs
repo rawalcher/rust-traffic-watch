@@ -158,7 +158,7 @@ async fn run_experiment_cycle(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
 
     loop {
         info!(

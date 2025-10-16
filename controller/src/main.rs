@@ -3,7 +3,7 @@ use std::{env, error::Error};
 use csv::Writer;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{sleep, timeout, Duration, Instant};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use std::sync::Arc;
 
@@ -91,7 +91,7 @@ impl ControllerHarness {
                     }
                 }
             }
-            info!("Result collection task finished with {} results", count);
+            debug!("Result collection task finished with {} results", count);
         });
 
         let controller_listener_task_note = "listener runs globally; not per-run";
@@ -186,7 +186,7 @@ impl ControllerHarness {
 
         let locked_results = results.lock().await;
         let final_count = locked_results.len();
-        info!(
+        debug!(
             "Generating CSV with {} results for experiment {}",
             final_count, config.experiment_id
         );
@@ -426,7 +426,7 @@ async fn run_test_suite(
                             config.duration_seconds = test_config.duration_seconds;
 
                             match harness.run_controller(config).await {
-                                Ok(_) => info!("✓ Experiment {} completed", experiment_id),
+                                Ok(_) => info!("Experiment {} completed", experiment_id),
                                 Err(e) => eprintln!("✗ Experiment {} failed: {}", experiment_id, e),
                             }
 
@@ -503,7 +503,7 @@ fn generate_analysis_csv(
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let filename = format!("logs/experiment_{}_{}.csv", experiment_id, timestamp);
 
-    info!("Saving {} results to {}", results.len(), filename);
+    debug!("Saving {} results to {}", results.len(), filename);
     let mut writer = Writer::from_path(&filename)?;
 
     writer.write_record(&[

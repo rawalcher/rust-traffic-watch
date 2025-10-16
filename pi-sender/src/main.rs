@@ -205,7 +205,7 @@ async fn handle_offload_experiment(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
 
     loop {
         info!("Connecting to controller at {}", controller_address());
@@ -325,12 +325,13 @@ pub fn handle_frame(
     let folder_res = res_folder(spec.resolution);
     let folder_codec = codec_folder(spec.codec);
     let ext = codec_ext(spec.codec);
+    let tier = image_tier(spec.tier);
 
-    // pi-sender/sample/{resolution}/{codec}/seq3-drone_{:07}.{ext}
+    // pi-sender/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}
     let mut path = PathBuf::from("pi-sender/sample");
     path.push(folder_res);
     path.push(folder_codec);
-    path.push(format!("seq3-drone_{:07}.{}", frame_number, ext));
+    path.push(format!("seq3-drone_{:07}_{}.{}", frame_number, tier, ext));
 
     if !path.exists() {
         return Err(format!("Frame file not found: {:?}", path).into());

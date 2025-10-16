@@ -635,6 +635,7 @@ dependencies = [
  "log",
  "shared",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -962,6 +963,7 @@ dependencies = [
  "log",
  "shared",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

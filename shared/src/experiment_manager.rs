@@ -1,10 +1,10 @@
 use crate::types::*;
 use crate::python_detector::PersistentPythonDetector;
-use log::{info, warn, error};
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{sleep, timeout, Duration};
+use tracing::{debug, error, info, warn};
 
 pub struct ExperimentManager {
     detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
@@ -69,7 +69,7 @@ impl ExperimentManager {
                     }
 
                     let seq_id = frame_msg.sequence_id;
-                    info!("Starting inference for sequence_id={}", seq_id);
+                    debug!("Starting inference for sequence_id={}", seq_id);
 
                     match inference_fn(frame_msg, Arc::clone(&detector), config.clone()).await {
                         Ok(inference_msg) => {
