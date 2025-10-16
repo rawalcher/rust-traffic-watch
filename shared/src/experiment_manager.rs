@@ -116,7 +116,7 @@ impl ExperimentManager {
         *pending = None;
     }
 
-    pub async fn shutdown(mut self) -> Result<(), String> {
+    pub async fn shutdown(&mut self) -> Result<(), String> {
         info!("Beginning experiment shutdown sequence");
 
         // Step 1: Clear pending work

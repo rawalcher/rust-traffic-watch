@@ -1,19 +1,18 @@
 use log::{debug, error, info, warn};
 use shared::constants::*;
+use shared::experiment_manager::ExperimentManager;
+use shared::network::{read_message, read_message_stream, spawn_writer};
 use shared::{
     current_timestamp_micros, perform_python_inference_with_counts, ControlMessage, DeviceId,
-    ExperimentConfig, FrameMessage, InferenceMessage, Message, PersistentPythonDetector,
+    ExperimentConfig, FrameMessage, InferenceMessage, Message,
 };
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
-
-use shared::network::{read_message, read_message_stream, spawn_writer};
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -29,11 +28,11 @@ async fn run_experiment_cycle(
         }
     };
 
-    let pending_frame: Arc<Mutex<Option<FrameMessage>>> = Arc::new(Mutex::new(None));
-    let pending_frame_network = Arc::clone(&pending_frame);
-    let pending_frame_inference = Arc::clone(&pending_frame);
-
-    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel();
+    info!("Initializing experiment manager...");
+    let manager = Arc::new(Mutex::new(ExperimentManager::new(
+        config.model_name.clone(),
+        INFERENCE_TENSORRT_PATH.to_string(),
+    )?));
 
     info!("Waiting for Pi to connect on {}...", jetson_bind_address());
     let listener = TcpListener::bind(jetson_bind_address()).await?;
@@ -58,9 +57,6 @@ async fn run_experiment_cycle(
                 Ok(Message::Frame(frame)) => {
                     let seq_id = frame.sequence_id;
                     info!("Jetson received frame from Pi: sequence_id={}", seq_id);
-                    if frame_tx.send(frame).is_err() {
-                        break;
-                    }
                 }
                 Ok(other) => debug!("Pi sent: {:?}", other),
                 Err(_) => {
@@ -71,27 +67,7 @@ async fn run_experiment_cycle(
         }
     });
 
-    tokio::spawn(async move {
-        while let Some(frame) = frame_rx.recv().await {
-            let seq_id = frame.sequence_id;
-            let mut pending = pending_frame_network.lock().await;
-            let old_seq = pending.as_ref().map(|f| f.sequence_id);
-            *pending = Some(frame);
-            if let Some(old) = old_seq {
-                debug!("Jetson: Dropped frame {} for newer frame {}", old, seq_id);
-            }
-            info!("Jetson: Updated pending frame to sequence_id={}", seq_id);
-        }
-    });
-
-    info!("Initializing detector...");
-    let model_name = config.model_name.clone();
-    let detector = tokio::task::spawn_blocking(move || {
-        PersistentPythonDetector::new(model_name, INFERENCE_TENSORRT_PATH.to_string())
-    })
-    .await??;
-
-    info!("Python detector ready, sending ReadyToStart");
+    info!("Experiment manager ready, sending ReadyToStart");
     ctrl_tx
         .send(Message::Control(ControlMessage::ReadyToStart))
         .await
@@ -101,55 +77,47 @@ async fn run_experiment_cycle(
     info!("Experiment started. Processing frames...");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let inference_config = config.clone();
-    let detector_arc = Arc::new(Mutex::new(detector));
-    let detector_clone = Arc::clone(&detector_arc);
+    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<FrameMessage>();
 
-    let inference_task = tokio::spawn(async move {
-        loop {
-            if *shutdown_rx.borrow() {
-                info!("Inference task received shutdown signal");
-                break;
-            }
+    {
+        let manager_clone = Arc::clone(&manager);
+        let mut locked = manager_clone.lock().await;
+        locked.start_inference(
+            result_tx,
+            config.clone(),
+            |frame, detector, cfg| async move {
+                let mut det_opt = detector.lock().await;
+                if let Some(ref mut det) = *det_opt {
+                    let mut frame_mut = frame;
+                    frame_mut.timing.jetson_received = Some(current_timestamp_micros());
 
-            let frame = {
-                let mut pending = pending_frame_inference.lock().await;
-                pending.take()
-            };
+                    let inference = perform_python_inference_with_counts(
+                        &frame_mut,
+                        det,
+                        &cfg.model_name,
+                        "offload",
+                    )?;
 
-            if let Some(frame_msg) = frame {
-                if *shutdown_rx.borrow() {
-                    info!(
-                        "Inference task: Dropping frame {} due to shutdown",
-                        frame_msg.sequence_id
-                    );
-                    break;
+                    frame_mut.timing.jetson_sent_result = Some(current_timestamp_micros());
+
+                    Ok(InferenceMessage {
+                        sequence_id: frame_mut.sequence_id,
+                        timing: frame_mut.timing,
+                        inference,
+                    })
+                } else {
+                    Err("Detector unavailable".into())
                 }
+            },
+        );
+    }
 
-                info!(
-                    "Jetson: Starting inference for sequence_id={}",
-                    frame_msg.sequence_id
-                );
-
-                let mut det = detector_clone.lock().await;
-                match handle_frame(frame_msg, &mut det, &inference_config).await {
-                    Ok(result) => {
-                        let seq_id = result.sequence_id;
-                        if result_tx.send(result).is_err() {
-                            info!("Result channel closed, exiting inference task");
-                            break;
-                        }
-                        info!("Jetson: Completed inference for sequence_id={}", seq_id);
-                    }
-                    Err(e) => error!("Failed to process frame: {}", e),
-                }
-            } else {
-                sleep(Duration::from_millis(1)).await;
-            }
+    let manager_clone = Arc::clone(&manager);
+    tokio::spawn(async move {
+        while let Some(frame) = frame_rx.recv().await {
+            let mgr = manager_clone.lock().await;
+            mgr.update_pending_frame(frame).await;
         }
-
-        info!("Inference task loop ended");
     });
 
     loop {
@@ -162,40 +130,19 @@ async fn run_experiment_cycle(
             }
             msg = read_message(ctrl_reader) => {
                 match msg? {
+                    Message::Frame(frame) => {
+                        warn!("Unexpected frame on controller channel");
+                        let _ = frame_tx.send(frame);
+                    }
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Experiment cycle complete, shutting down tasks");
+                        info!("Shutdown received, beginning teardown");
 
-                        {
-                            let mut pending = pending_frame.lock().await;
-                            *pending = None;
-                        }
-
-                        let _ = shutdown_tx.send(true);
-
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-
-                        info!("Shutting down Python detector (will wait for in-flight inference)...");
-                        let mut det = detector_arc.lock().await;
-                        if let Err(e) = det.shutdown() {
-                            error!("Failed to shutdown detector: {}", e);
-                        } else {
-                            info!("Detector shutdown successful");
-                        }
-
-                        match tokio::time::timeout(Duration::from_secs(1), inference_task).await {
-                            Ok(Ok(())) => {
-                                info!("Inference task completed");
-                            }
-                            Ok(Err(e)) => {
-                                error!("Inference task panicked: {:?}", e);
-                            }
-                            Err(_) => {
-                                warn!("Inference task did not exit in 1s (already stopped)");
-                            }
-                        }
-
-                        // Abort pi_handler
                         pi_handler.abort();
+
+                        let mut mgr = manager.lock().await;
+                        if let Err(e) = mgr.shutdown().await {
+                            error!("Manager shutdown error: {}", e);
+                        }
 
                         break;
                     }
@@ -205,7 +152,7 @@ async fn run_experiment_cycle(
         }
     }
 
-    info!("Experiment complete");
+    info!("Experiment cycle complete");
     Ok(true)
 }
 
@@ -281,23 +228,4 @@ async fn wait_for_experiment_start(
             msg => warn!("Waiting for start, got: {:?}", msg),
         }
     }
-}
-
-async fn handle_frame(
-    mut frame: FrameMessage,
-    detector: &mut PersistentPythonDetector,
-    config: &ExperimentConfig,
-) -> Result<InferenceMessage, Box<dyn Error + Send + Sync>> {
-    frame.timing.jetson_received = Some(current_timestamp_micros());
-
-    let inference =
-        perform_python_inference_with_counts(&frame, detector, &config.model_name, "offload")?;
-
-    frame.timing.jetson_sent_result = Some(current_timestamp_micros());
-
-    Ok(InferenceMessage {
-        sequence_id: frame.sequence_id,
-        timing: frame.timing,
-        inference,
-    })
 }
