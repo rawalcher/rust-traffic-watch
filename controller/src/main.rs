@@ -3,7 +3,7 @@ use std::{env, error::Error};
 use csv::Writer;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{sleep, timeout, Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use std::sync::Arc;
 
@@ -53,6 +53,42 @@ impl ControllerHarness {
             active_sink_tx,
             _forwarder_task: forwarder_task,
             _listener_task: listener_task,
+        }
+    }
+
+    async fn run_controller_with_retry(
+        &self,
+        config: ExperimentConfig,
+        max_retries: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut attempt = 0;
+
+        loop {
+            attempt += 1;
+
+            match self.run_controller(config.clone()).await {
+                Ok(()) => {
+                    return Ok(());
+                }
+                Err(e) if attempt <= max_retries => {
+                    if e.to_string().contains("disconnected")
+                        || e.to_string().contains("writer channel closed")
+                    {
+                        warn!(
+                            "Device disconnected. Restarting experiment in 30s (attempt {}/{})",
+                            attempt + 1,
+                            max_retries + 1
+                        );
+                        sleep(Duration::from_secs(30)).await;
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
         }
     }
 
@@ -403,17 +439,12 @@ async fn run_test_suite(
                         for resolution in &test_config.resolutions {
                             current += 1;
 
-                            info!("=================================================");
-                            info!(
-                                "Experiment {}/{}: Model={}, FPS={}, Mode={:?}, Codec={:?}, Tier={:?}, Res={:?}",
-                                current, total, model, fps, mode, codec, tier, resolution
-                            );
-                            info!("=================================================");
-
                             let experiment_id = format!(
                                 "{:?}_{}_{}fps_{:?}_{:?}_{:?}",
                                 mode, model, fps, codec, tier, resolution
                             );
+
+                            info!("Experiment {}/{}: {}", current, total, experiment_id);
 
                             let mut config = ExperimentConfig::new(
                                 experiment_id.clone(),
@@ -428,9 +459,9 @@ async fn run_test_suite(
                             config.fixed_fps = *fps;
                             config.duration_seconds = test_config.duration_seconds;
 
-                            match harness.run_controller(config).await {
-                                Ok(_) => info!("Experiment {} completed", experiment_id),
-                                Err(e) => eprintln!("✗ Experiment {} failed: {}", experiment_id, e),
+                            match harness.run_controller_with_retry(config, 3).await {
+                                Ok(_) => info!("Experiment {} complete", experiment_id),
+                                Err(e) => error!("Experiment {} failed: {}", experiment_id, e),
                             }
 
                             if current < total {
@@ -445,7 +476,7 @@ async fn run_test_suite(
     }
 
     info!("=================================================");
-    info!("All experiments completed! Results in logs/");
+    info!("Test suite complete");
     info!("=================================================");
     Ok(())
 }
@@ -576,7 +607,11 @@ fn generate_analysis_csv(
     }
 
     writer.flush()?;
-    info!("Analysis saved to {} with {} records", filename, results.len());
+    info!(
+        "Analysis saved to {} with {} records",
+        filename,
+        results.len()
+    );
     Ok(())
 }
 
