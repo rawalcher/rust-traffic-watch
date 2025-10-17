@@ -13,21 +13,16 @@ from PIL import Image
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.cuda.amp.autocast.*")
 
 LEGACY_HUB_MODELS = {"yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x", "custom"}
-PROCESS_TTL_SECONDS = 120
-
+IDLE_TIMEOUT_SECONDS = 120
 
 class PersistentPyTorchInferenceServer:
     def __init__(self, model_name='yolov5s'):
         self.api = None
         self.model_name = model_name
-
-        def kill_after_ttl():
-            time.sleep(PROCESS_TTL_SECONDS)
-            print(f"TTL expired ({PROCESS_TTL_SECONDS}s), self-terminating", file=sys.stderr, flush=True)
-            os._exit(0)
-
-        ttl_thread = threading.Thread(target=kill_after_ttl, daemon=True)
-        ttl_thread.start()
+        self.last_activity = time.time()
+        self.start_time = time.time()
+        self.inference_count = 0
+        self.should_exit = False
 
         print(f"Loading model: {model_name}", file=sys.stderr, flush=True)
 
@@ -76,6 +71,21 @@ class PersistentPyTorchInferenceServer:
 
         print("READY", flush=True)
 
+        def activity_watchdog():
+            while not self.should_exit:
+                now = time.time()
+                idle_time = now - self.last_activity
+
+                if idle_time > IDLE_TIMEOUT_SECONDS:
+                    print(f"Idle timeout ({IDLE_TIMEOUT_SECONDS}s), processed {self.inference_count} frames, exiting",
+                          file=sys.stderr, flush=True)
+                    os._exit(0)
+
+                time.sleep(5)
+
+        watchdog = threading.Thread(target=activity_watchdog, daemon=True)
+        watchdog.start()
+
     def _infer_hub(self, image):
         with torch.no_grad():
             results = self.model(image)
@@ -107,6 +117,9 @@ class PersistentPyTorchInferenceServer:
         return rows
 
     def process_frame(self, image_bytes):
+        self.last_activity = time.time()
+        self.inference_count += 1
+
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         width, height = image.size
 
@@ -163,6 +176,8 @@ class PersistentPyTorchInferenceServer:
 
         while True:
             try:
+                self.last_activity = time.time()
+
                 length_bytes = sys.stdin.buffer.read(4)
                 if len(length_bytes) != 4:
                     break

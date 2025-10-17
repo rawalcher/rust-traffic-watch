@@ -12,7 +12,7 @@ import pycuda.driver as cuda
 import tensorrt as trt
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
-PROCESS_TTL_SECONDS = 120
+IDLE_TIMEOUT_SECONDS = 120
 
 # Match PyTorch behavior
 TRAFFIC_CLASS_IDS = {0, 1, 2, 3, 5, 6, 7}
@@ -87,13 +87,9 @@ def nms_class_aware(boxes, scores, classes, iou_thr=IOU_THR):
 
 class PersistentTRTInferenceServer:
     def __init__(self, engine_path):
-        def kill_after_ttl():
-            time.sleep(PROCESS_TTL_SECONDS)
-            print(f"TTL expired ({PROCESS_TTL_SECONDS}s), self-terminating", file=sys.stderr, flush=True)
-            os._exit(0)
-
-        ttl_thread = threading.Thread(target=kill_after_ttl, daemon=True)
-        ttl_thread.start()
+        self.last_activity = time.time()
+        self.start_time = time.time()
+        self.inference_count = 0
 
         print(f"Loading engine: {engine_path}", file=sys.stderr, flush=True)
 
@@ -122,8 +118,23 @@ class PersistentTRTInferenceServer:
         self.class_mapping = CLASS_MAPPING
         self.vehicle_classes = VEHICLE_CLASSES
 
-        # Signal readiness on stdout (your Rust waits for this)
+        # Signal readiness on stdout
         print("READY", flush=True)
+
+        def activity_watchdog():
+            while True:
+                now = time.time()
+                idle_time = now - self.last_activity
+
+                if idle_time > IDLE_TIMEOUT_SECONDS:
+                    print(f"Idle timeout, exiting after {self.inference_count} inferences",
+                          file=sys.stderr, flush=True)
+                    os._exit(0)
+
+                time.sleep(5)
+
+        ttl_thread = threading.Thread(target=activity_watchdog, daemon=True)
+        ttl_thread.start()
 
     def _ensure_shapes(self, n, c, h, w):
         """Set dynamic shape if needed and (re)allocate buffers."""
@@ -140,6 +151,9 @@ class PersistentTRTInferenceServer:
                 self.bindings[idx] = int(self.device[idx])
 
     def infer(self, image_bytes):
+        self.last_activity = time.time()
+        self.inference_count += 1
+
         # Decode input
         img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
