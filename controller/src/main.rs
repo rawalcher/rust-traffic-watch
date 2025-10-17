@@ -127,6 +127,9 @@ impl ControllerHarness {
         let pulse_interval = Duration::from_millis((1000.0 / config.fixed_fps) as u64);
         let mut expected_results = 0u64;
 
+        let frame_skip = (SOURCE_FPS / config.fixed_fps).round() as u64;
+        let frame_skip = frame_skip.max(1);
+
         while start.elapsed().as_secs() < config.duration_seconds {
             if let Some(sender) = get_device_sender(&Pi).await {
                 let mut timing = TimingMetadata::default();
@@ -138,7 +141,7 @@ impl ControllerHarness {
                 info!("Sent pulse {} to Pi", sequence_id);
 
                 sequence_id += 1;
-                frame_number = (frame_number + 30 - 1) % MAX_FRAME_SEQUENCE + 1;
+                frame_number = (frame_number + frame_skip - 1) % MAX_FRAME_SEQUENCE + 1;
                 expected_results += 1;
             }
             sleep(pulse_interval).await;
