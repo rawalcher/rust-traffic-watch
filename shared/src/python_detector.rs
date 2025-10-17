@@ -22,7 +22,7 @@ impl PersistentPythonDetector {
         debug!("Launching Python detector with model '{}'", model_name);
 
         info!("Cleaning up any old Python processes before starting new one");
-        nuclear_kill_python();
+        nuclear_kill_inference();
         std::thread::sleep(Duration::from_millis(500));
 
         let mut process = Command::new("python3")
@@ -168,33 +168,56 @@ impl Drop for PersistentPythonDetector {
     }
 }
 
-fn nuclear_kill_python() {
-    info!("Executing nuclear Python kill sequence");
+fn nuclear_kill_inference() {
+    use log::{info, warn};
+    use std::process::Command;
+    use std::thread::sleep;
+    use std::time::Duration;
 
-    let _ = Command::new("pkill").args(["-f", "python"]).output();
+    info!("Order 66 (only inference_* scripts)");
 
-    std::thread::sleep(Duration::from_millis(200));
+    for sig in ["-TERM", "-KILL"] {
+        let _ = Command::new("pkill")
+            .args([sig, "-f", "inference_pytorch.py"])
+            .status();
+        let _ = Command::new("pkill")
+            .args([sig, "-f", "inference_tensorrt.py"])
+            .status();
+        sleep(Duration::from_millis(200));
+    }
 
-    let _ = Command::new("pkill").args(["-9", "-f", "python"]).output();
+    let mut leftovers: Vec<String> = Vec::new();
 
-    std::thread::sleep(Duration::from_millis(100));
+    if let Ok(out) = Command::new("pgrep")
+        .args(["-fa", "inference_pytorch.py"])
+        .output()
+    {
+        leftovers.extend(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|s| s.to_string()),
+        );
+    }
+    if let Ok(out) = Command::new("pgrep")
+        .args(["-fa", "inference_tensorrt.py"])
+        .output()
+    {
+        leftovers.extend(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|s| s.to_string()),
+        );
+    }
 
-    let _ = Command::new("pkill")
-        .args(["-9", "-f", "inference_pytorch.py"])
-        .output();
+    leftovers.sort();
+    leftovers.dedup();
 
-    let _ = Command::new("pkill")
-        .args(["-9", "-f", "inference_tensorrt.py"])
-        .output();
-
-    std::thread::sleep(Duration::from_millis(100));
-
-    if let Ok(output) = Command::new("pgrep").args(["-f", "python"]).output() {
-        if output.stdout.is_empty() {
-            info!("All Python processes eliminated");
-        } else {
-            warn!("Some Python processes may still exist:");
-            warn!("{}", String::from_utf8_lossy(&output.stdout));
+    if leftovers.is_empty() {
+        info!("All inference_* processes eliminated.");
+    } else {
+        warn!("Some inference_* processes may still exist:");
+        for line in leftovers {
+            warn!("{}", line);
         }
     }
 }

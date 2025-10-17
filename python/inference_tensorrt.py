@@ -109,7 +109,7 @@ class PersistentTRTInferenceServer:
 
                 time.sleep(5)
 
-        ttl_thread = threading.Thread(target=activity_watchdog(), daemon=True)
+        ttl_thread = threading.Thread(target=activity_watchdog, daemon=True)
         ttl_thread.start()
 
         print(f"Loading engine: {engine_path}", file=sys.stderr, flush=True)
