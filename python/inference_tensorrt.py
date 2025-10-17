@@ -1,13 +1,18 @@
-import io, json, struct, sys
-import numpy as np
+import json
+import os
+import struct
+import sys
+import threading
+import time
+
 import cv2
-
-import tensorrt as trt
-import pycuda.driver as cuda
+import numpy as np
 import pycuda.autoinit  # noqa
-
+import pycuda.driver as cuda
+import tensorrt as trt
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
+PROCESS_TTL_SECONDS = 120
 
 # Match PyTorch behavior
 TRAFFIC_CLASS_IDS = {0, 1, 2, 3, 5, 6, 7}
@@ -26,11 +31,12 @@ CLASS_MAPPING = {
 }
 VEHICLE_CLASSES = {'car', 'truck', 'bus', 'motorcycle', 'bicycle'}
 
-CONF_THR = 0.25    # Ultralytics default
-IOU_THR = 0.45     # Ultralytics default (class-aware NMS)
-NET_SIZE = 640     # engines built with imgsz=640
+CONF_THR = 0.25  # Ultralytics default
+IOU_THR = 0.45  # Ultralytics default (class-aware NMS)
+NET_SIZE = 640  # engines built with imgsz=640
 
-def letterbox_bgr(img, new_size=NET_SIZE, color=(114,114,114)):
+
+def letterbox_bgr(img, new_size=NET_SIZE, color=(114, 114, 114)):
     """Resize with unchanged aspect ratio using padding (Ultralytics-style)."""
     h, w = img.shape[:2]
     r = min(new_size / w, new_size / h)
@@ -42,6 +48,7 @@ def letterbox_bgr(img, new_size=NET_SIZE, color=(114,114,114)):
         cv2.BORDER_CONSTANT, value=color
     )
     return out, r, padw, padh, w, h
+
 
 def nms_class_aware(boxes, scores, classes, iou_thr=IOU_THR):
     """Per-class greedy NMS to match Ultralytics defaults."""
@@ -77,8 +84,17 @@ def nms_class_aware(boxes, scores, classes, iou_thr=IOU_THR):
         keep_global.extend(list(idxs[keep_local]))
     return keep_global
 
+
 class PersistentTRTInferenceServer:
     def __init__(self, engine_path):
+        def kill_after_ttl():
+            time.sleep(PROCESS_TTL_SECONDS)
+            print(f"TTL expired ({PROCESS_TTL_SECONDS}s), self-terminating", file=sys.stderr, flush=True)
+            os._exit(0)
+
+        ttl_thread = threading.Thread(target=kill_after_ttl, daemon=True)
+        ttl_thread.start()
+
         print(f"Loading engine: {engine_path}", file=sys.stderr, flush=True)
 
         self.runtime = trt.Runtime(TRT_LOGGER)
@@ -198,8 +214,10 @@ class PersistentTRTInferenceServer:
         y1 = (y1 - padh) / r
         x2 = (x2 - padw) / r
         y2 = (y2 - padh) / r
-        x1 = np.clip(x1, 0, orig_w); y1 = np.clip(y1, 0, orig_h)
-        x2 = np.clip(x2, 0, orig_w); y2 = np.clip(y2, 0, orig_h)
+        x1 = np.clip(x1, 0, orig_w);
+        y1 = np.clip(y1, 0, orig_h)
+        x2 = np.clip(x2, 0, orig_w);
+        y2 = np.clip(y2, 0, orig_h)
 
         boxes_xyxy = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
 
@@ -276,11 +294,13 @@ class PersistentTRTInferenceServer:
                     "counts": empty_counts
                 })
 
+
 def main():
     arg = sys.argv[1] if len(sys.argv) > 1 else "yolov5n"
     engine_path = arg if arg.endswith(".engine") else f"{arg}_fp16.engine"
     server = PersistentTRTInferenceServer(engine_path)
     server.run_server()
+
 
 if __name__ == "__main__":
     main()

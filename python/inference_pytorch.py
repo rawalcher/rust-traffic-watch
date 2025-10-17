@@ -1,27 +1,39 @@
-# inference_pytorch.py
 import io
 import json
 import struct
 import sys
 import warnings
+import time
+import threading
+import os
 
 import torch
 from PIL import Image
 
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.cuda.amp.autocast.*")
 
-LEGACY_HUB_MODELS = {"yolov5n","yolov5s","yolov5m","yolov5l","yolov5x","custom"}
+LEGACY_HUB_MODELS = {"yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x", "custom"}
+PROCESS_TTL_SECONDS = 120
+
 
 class PersistentPyTorchInferenceServer:
     def __init__(self, model_name='yolov5s'):
         self.api = None
         self.model_name = model_name
 
+        def kill_after_ttl():
+            time.sleep(PROCESS_TTL_SECONDS)
+            print(f"TTL expired ({PROCESS_TTL_SECONDS}s), self-terminating", file=sys.stderr, flush=True)
+            os._exit(0)
+
+        ttl_thread = threading.Thread(target=kill_after_ttl, daemon=True)
+        ttl_thread.start()
+
         print(f"Loading model: {model_name}", file=sys.stderr, flush=True)
 
         use_ultralytics = (
-            model_name.endswith('u') or
-            model_name not in LEGACY_HUB_MODELS
+                model_name.endswith('u') or
+                model_name not in LEGACY_HUB_MODELS
         )
 
         if use_ultralytics:
@@ -38,7 +50,8 @@ class PersistentPyTorchInferenceServer:
         else:
             # Legacy torch.hub path
             if model_name not in LEGACY_HUB_MODELS:
-                print(f"'{model_name}' not available via torch.hub; using 'yolov5n' instead.", file=sys.stderr, flush=True)
+                print(f"'{model_name}' not available via torch.hub; using 'yolov5n' instead.", file=sys.stderr,
+                      flush=True)
                 model_name = "yolov5n"
             self.model = torch.hub.load('ultralytics/yolov5', model_name, pretrained=True, trust_repo=True)
             self.model.eval()
@@ -81,14 +94,15 @@ class PersistentPyTorchInferenceServer:
         if boxes is not None and len(boxes) > 0:
             xyxy = boxes.xyxy.cpu().tolist()
             conf = boxes.conf.cpu().tolist()
-            cls  = boxes.cls.cpu().tolist()
+            cls = boxes.cls.cpu().tolist()
             for (x1, y1, x2, y2), c, k in zip(xyxy, conf, cls):
                 k = int(k)
                 rows.append({
                     'xmin': x1, 'ymin': y1, 'xmax': x2, 'ymax': y2,
                     'confidence': float(c),
                     'class': k,
-                    'name': names.get(k, str(k)) if isinstance(names, dict) else (names[k] if k < len(names) else str(k))
+                    'name': names.get(k, str(k)) if isinstance(names, dict) else (
+                        names[k] if k < len(names) else str(k))
                 })
         return rows
 

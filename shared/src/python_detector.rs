@@ -21,6 +21,10 @@ impl PersistentPythonDetector {
     pub fn new(model_name: String, script_path: String) -> Result<Self, String> {
         debug!("Launching Python detector with model '{}'", model_name);
 
+        info!("Cleaning up any old Python processes before starting new one");
+        nuclear_kill_python();
+        std::thread::sleep(Duration::from_millis(500));
+
         let mut process = Command::new("python3")
             .arg(script_path)
             .arg(&model_name)
@@ -30,11 +34,10 @@ impl PersistentPythonDetector {
             .spawn()
             .map_err(|e| format!("Spawn failed: {}", e))?;
 
+        // long timeout since pi COULD be taking forever
         let ready = Self::wait_for_ready(&mut process, Duration::from_secs(600))?;
 
         if !ready {
-            warn!("Python process did not become ready, nuking it");
-            nuclear_kill_python();
             return Err("Python process did not become ready in time".into());
         }
 
@@ -91,17 +94,15 @@ impl PersistentPythonDetector {
         }
 
         self.state = DetectorState::ShuttingDown;
-        info!("INITIATING NUCLEAR SHUTDOWN OF PYTHON PROCESSES 🔥");
+        info!("Initiating normal shutdown");
 
         if let Some(mut process) = self.process.take() {
             let _ = process.kill();
             let _ = process.wait();
         }
 
-        nuclear_kill_python();
-
         self.state = DetectorState::Terminated;
-        info!("Nuclear shutdown complete");
+        info!("Shutdown complete");
         Ok(())
     }
 
