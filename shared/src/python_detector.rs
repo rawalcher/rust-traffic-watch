@@ -1,5 +1,5 @@
 use crate::types::*;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -33,8 +33,8 @@ impl PersistentPythonDetector {
         let ready = Self::wait_for_ready(&mut process, Duration::from_secs(600))?;
 
         if !ready {
-            let _ = process.kill();
-            let _ = process.wait();
+            warn!("Python process did not become ready, nuking it");
+            nuclear_kill_python();
             return Err("Python process did not become ready in time".into());
         }
 
@@ -91,75 +91,25 @@ impl PersistentPythonDetector {
         }
 
         self.state = DetectorState::ShuttingDown;
+        info!("INITIATING NUCLEAR SHUTDOWN OF PYTHON PROCESSES 🔥");
 
         if let Some(mut process) = self.process.take() {
-            let pid = process.id();
-            debug!("Shutting down Python detector (PID: {})", pid);
-
-            // Step 1: Close stdin to signal shutdown
-            drop(process.stdin.take());
-
-            // Step 2: Give process time to finish current work (up to 5 seconds)
-            let wait_result = Self::wait_with_timeout(&mut process, Duration::from_secs(5));
-
-            match wait_result {
-                Ok(status) => {
-                    debug!("Python process exited cleanly: {:?}", status);
-                    self.state = DetectorState::Terminated;
-                    Ok(())
-                }
-                Err(_) => {
-                    // Step 3: Force kill if it didn't exit gracefully
-                    warn!("Python process (PID: {}) did not exit gracefully, force killing", pid);
-
-                    if let Err(e) = process.kill() {
-                        error!("Failed to kill process: {}", e);
-                        self.state = DetectorState::Terminated;
-                        return Err(format!("Failed to kill process: {}", e));
-                    }
-
-                    // Wait for kill to complete
-                    match process.wait() {
-                        Ok(status) => {
-                            warn!("Python process forcefully terminated: {:?}", status);
-                            self.state = DetectorState::Terminated;
-                            Ok(())
-                        }
-                        Err(e) => {
-                            error!("Failed to wait after kill: {}", e);
-                            self.state = DetectorState::Terminated;
-                            Err(format!("Failed to wait after kill: {}", e))
-                        }
-                    }
-                }
-            }
-        } else {
-            self.state = DetectorState::Terminated;
-            Ok(())
+            let _ = process.kill();
+            let _ = process.wait();
         }
-    }
 
-    fn wait_with_timeout(process: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus, ()> {
-        use std::time::Instant;
+        nuclear_kill_python();
 
-        let start = Instant::now();
-        loop {
-            match process.try_wait() {
-                Ok(Some(status)) => return Ok(status),
-                Ok(None) => {
-                    if start.elapsed() > timeout {
-                        return Err(());
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(_) => return Err(()),
-            }
-        }
+        self.state = DetectorState::Terminated;
+        info!("Nuclear shutdown complete");
+        Ok(())
     }
 
     pub fn is_alive(&mut self) -> bool {
-        self.state == DetectorState::Ready &&
-            self.process.as_mut()
+        self.state == DetectorState::Ready
+            && self
+                .process
+                .as_mut()
                 .and_then(|p| p.try_wait().ok())
                 .map(|s| s.is_none())
                 .unwrap_or(false)
@@ -169,14 +119,15 @@ impl PersistentPythonDetector {
         let process = self.process.as_mut().ok_or("Process not running")?;
         let stdin = process.stdin.as_mut().ok_or("Missing stdin")?;
 
-        stdin.write_all(&(image_bytes.len() as u32).to_le_bytes())
+        stdin
+            .write_all(&(image_bytes.len() as u32).to_le_bytes())
             .map_err(|e| format!("Write length failed: {}", e))?;
 
-        stdin.write_all(image_bytes)
+        stdin
+            .write_all(image_bytes)
             .map_err(|e| format!("Write image failed: {}", e))?;
 
-        stdin.flush()
-            .map_err(|e| format!("Flush failed: {}", e))?;
+        stdin.flush().map_err(|e| format!("Flush failed: {}", e))?;
 
         Ok(())
     }
@@ -186,17 +137,18 @@ impl PersistentPythonDetector {
         let stdout = process.stdout.as_mut().ok_or("Missing stdout")?;
 
         let mut length_buf = [0u8; 4];
-        stdout.read_exact(&mut length_buf)
+        stdout
+            .read_exact(&mut length_buf)
             .map_err(|e| format!("Read length failed: {}", e))?;
 
         let length = u32::from_le_bytes(length_buf) as usize;
         let mut buf = vec![0u8; length];
 
-        stdout.read_exact(&mut buf)
+        stdout
+            .read_exact(&mut buf)
             .map_err(|e| format!("Read data failed: {}", e))?;
 
-        let text = String::from_utf8(buf)
-            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+        let text = String::from_utf8(buf).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
         serde_json::from_str::<PythonDetectionResult>(&text).or_else(|_| {
             serde_json::from_str::<PythonErrorResult>(&text)
@@ -209,8 +161,39 @@ impl PersistentPythonDetector {
 impl Drop for PersistentPythonDetector {
     fn drop(&mut self) {
         if self.state != DetectorState::Terminated {
-            error!("PersistentPythonDetector dropped without explicit shutdown!");
+            error!("PersistentPythonDetector dropped without shutdown! Going nuclear!");
             let _ = self.shutdown();
+        }
+    }
+}
+
+fn nuclear_kill_python() {
+    info!("Executing nuclear Python kill sequence");
+
+    let _ = Command::new("pkill").args(["-f", "python"]).output();
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    let _ = Command::new("pkill").args(["-9", "-f", "python"]).output();
+
+    std::thread::sleep(Duration::from_millis(100));
+
+    let _ = Command::new("pkill")
+        .args(["-9", "-f", "inference_pytorch.py"])
+        .output();
+
+    let _ = Command::new("pkill")
+        .args(["-9", "-f", "inference_tensorrt.py"])
+        .output();
+
+    std::thread::sleep(Duration::from_millis(100));
+
+    if let Ok(output) = Command::new("pgrep").args(["-f", "python"]).output() {
+        if output.stdout.is_empty() {
+            info!("All Python processes eliminated");
+        } else {
+            warn!("Some Python processes may still exist:");
+            warn!("{}", String::from_utf8_lossy(&output.stdout));
         }
     }
 }
