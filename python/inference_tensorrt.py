@@ -12,8 +12,7 @@ import pycuda.driver as cuda
 import tensorrt as trt
 
 TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
-IDLE_TIMEOUT_SECONDS = 60
-MAX_LIFETIME_SECONDS = 600
+IDLE_TIMEOUT_SECONDS = 120
 
 # Match PyTorch behavior
 TRAFFIC_CLASS_IDS = {0, 1, 2, 3, 5, 6, 7}
@@ -92,26 +91,6 @@ class PersistentTRTInferenceServer:
         self.start_time = time.time()
         self.inference_count = 0
 
-        def activity_watchdog():
-            while True:
-                now = time.time()
-                idle_time = now - self.last_activity
-                total_time = now - self.start_time
-
-                if idle_time > IDLE_TIMEOUT_SECONDS:
-                    print(f"Idle timeout, exiting after {self.inference_count} inferences",
-                          file=sys.stderr, flush=True)
-                    os._exit(0)
-
-                if total_time > MAX_LIFETIME_SECONDS:
-                    print(f"Max lifetime reached, exiting", file=sys.stderr, flush=True)
-                    os._exit(0)
-
-                time.sleep(5)
-
-        ttl_thread = threading.Thread(target=activity_watchdog, daemon=True)
-        ttl_thread.start()
-
         print(f"Loading engine: {engine_path}", file=sys.stderr, flush=True)
 
         self.runtime = trt.Runtime(TRT_LOGGER)
@@ -141,6 +120,21 @@ class PersistentTRTInferenceServer:
 
         # Signal readiness on stdout
         print("READY", flush=True)
+
+        def activity_watchdog():
+            while True:
+                now = time.time()
+                idle_time = now - self.last_activity
+
+                if idle_time > IDLE_TIMEOUT_SECONDS:
+                    print(f"Idle timeout, exiting after {self.inference_count} inferences",
+                          file=sys.stderr, flush=True)
+                    os._exit(0)
+
+                time.sleep(5)
+
+        ttl_thread = threading.Thread(target=activity_watchdog, daemon=True)
+        ttl_thread.start()
 
     def _ensure_shapes(self, n, c, h, w):
         """Set dynamic shape if needed and (re)allocate buffers."""

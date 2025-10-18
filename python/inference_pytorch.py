@@ -14,8 +14,6 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*torch.cuda.
 
 LEGACY_HUB_MODELS = {"yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x", "custom"}
 IDLE_TIMEOUT_SECONDS = 120
-MAX_LIFETIME_SECONDS = 600
-
 
 class PersistentPyTorchInferenceServer:
     def __init__(self, model_name='yolov5s'):
@@ -25,28 +23,6 @@ class PersistentPyTorchInferenceServer:
         self.start_time = time.time()
         self.inference_count = 0
         self.should_exit = False
-
-        def activity_watchdog():
-            while not self.should_exit:
-                now = time.time()
-                idle_time = now - self.last_activity
-                total_time = now - self.start_time
-
-                if idle_time > IDLE_TIMEOUT_SECONDS:
-                    print(f"Idle timeout ({IDLE_TIMEOUT_SECONDS}s), processed {self.inference_count} frames, exiting",
-                          file=sys.stderr, flush=True)
-                    os._exit(0)
-
-                if total_time > MAX_LIFETIME_SECONDS:
-                    print(
-                        f"Max lifetime reached ({MAX_LIFETIME_SECONDS}s), processed {self.inference_count} frames, exiting",
-                        file=sys.stderr, flush=True)
-                    os._exit(0)
-
-                time.sleep(5)
-
-        watchdog = threading.Thread(target=activity_watchdog, daemon=True)
-        watchdog.start()
 
         print(f"Loading model: {model_name}", file=sys.stderr, flush=True)
 
@@ -94,6 +70,21 @@ class PersistentPyTorchInferenceServer:
         self.vehicle_classes = {'car', 'truck', 'bus', 'motorcycle', 'bicycle'}
 
         print("READY", flush=True)
+
+        def activity_watchdog():
+            while not self.should_exit:
+                now = time.time()
+                idle_time = now - self.last_activity
+
+                if idle_time > IDLE_TIMEOUT_SECONDS:
+                    print(f"Idle timeout ({IDLE_TIMEOUT_SECONDS}s), processed {self.inference_count} frames, exiting",
+                          file=sys.stderr, flush=True)
+                    os._exit(0)
+
+                time.sleep(5)
+
+        watchdog = threading.Thread(target=activity_watchdog, daemon=True)
+        watchdog.start()
 
     def _infer_hub(self, image):
         with torch.no_grad():
