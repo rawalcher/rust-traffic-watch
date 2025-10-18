@@ -91,6 +91,7 @@ async fn handle_local_experiment(
     if let Err(e) = manager.shutdown().await {
         error!("Manager shutdown error: {}", e);
     }
+    sleep(Duration::from_secs(2)).await;
 
     result
 }

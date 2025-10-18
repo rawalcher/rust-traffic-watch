@@ -191,6 +191,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
                         Ok(true) => {
                             info!("Ready for next experiment");
+                            sleep(Duration::from_secs(2)).await;
                             continue;
                         }
                         Ok(false) => {
