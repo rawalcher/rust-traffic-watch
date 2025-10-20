@@ -33,7 +33,7 @@ impl ControllerHarness {
             })
             .await
             {
-                warn!("controller listener exited with error: {:?}", e);
+                warn!("tmc-coordinator listener exited with error: {:?}", e);
             }
         });
 

@@ -1,5 +1,5 @@
 [workspace]
-members = ["pi-sender", "jetson-receiver", "controller", "shared", "preprocessor"]
+members = ["roadside-unit", "zone-processor", "tmc-coordinator", "shared", "preprocessor"]
 resolver = "2"
 
 [workspace.dependencies]

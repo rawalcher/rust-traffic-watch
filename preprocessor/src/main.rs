@@ -148,7 +148,7 @@ fn discover_input_images(input_dir: &Path) -> Result<Vec<ConversionTask>, Box<dy
 
                         tasks.push(ConversionTask {
                             input_path: path.clone(),
-                            output_base: PathBuf::from("pi-sender/sample"),
+                            output_base: PathBuf::from("roadside-unit/sample"),
                             frame_number,
                         });
                     }
@@ -226,7 +226,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("  Total conversions: {}", total_conversions);
     println!();
 
-    fs::create_dir_all("pi-sender/sample")?;
+    fs::create_dir_all("roadside-unit/sample")?;
 
     let stats = Arc::new(Mutex::new(ConversionStats::new(total_conversions)));
 

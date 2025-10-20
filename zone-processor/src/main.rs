@@ -134,7 +134,7 @@ async fn run_experiment_cycle(
     loop {
         tokio::select! {
             Some(result) = result_rx.recv() => {
-                info!("Sending result for sequence_id {} back to controller", result.sequence_id);
+                info!("Sending result for sequence_id {} back to tmc-coordinator", result.sequence_id);
                 if ctrl_tx.send(Message::Result(result)).await.is_err() {
                     error!("Controller writer channel closed");
                     break;
@@ -143,11 +143,11 @@ async fn run_experiment_cycle(
             msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Frame(frame) => {
-                        warn!("Unexpected frame on controller channel, forwarding to pipeline");
+                        warn!("Unexpected frame on tmc-coordinator channel, forwarding to pipeline");
                         let _ = frame_tx.send(frame);
                     }
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received from controller, beginning teardown");
+                        info!("Shutdown received from tmc-coordinator, beginning teardown");
 
                         drop(frame_tx);
                         pi_handler.abort();
@@ -160,7 +160,7 @@ async fn run_experiment_cycle(
 
                         break;
                     }
-                    unexpected => warn!("Unexpected controller message: {:?}", unexpected),
+                    unexpected => warn!("Unexpected tmc-coordinator message: {:?}", unexpected),
                 }
             }
         }
@@ -176,7 +176,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     loop {
         info!(
-            "Jetson connecting to controller at {}",
+            "Jetson connecting to tmc-coordinator at {}",
             controller_address()
         );
 
@@ -207,7 +207,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
             Err(e) => {
                 error!(
-                    "Failed to connect to controller: {}. Retrying in 10 seconds...",
+                    "Failed to connect to tmc-coordinator: {}. Retrying in 10 seconds...",
                     e
                 );
             }

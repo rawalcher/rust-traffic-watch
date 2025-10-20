@@ -224,7 +224,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
     loop {
-        info!("Connecting to controller at {}", controller_address());
+        info!("Connecting to tmc-coordinator at {}", controller_address());
 
         match TcpStream::connect(controller_address()).await {
             Ok(controller_stream) => {
@@ -255,7 +255,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
             Err(e) => {
                 error!(
-                    "Failed to connect to controller: {}. Retrying in 10 seconds...",
+                    "Failed to connect to tmc-coordinator: {}. Retrying in 10 seconds...",
                     e
                 );
             }
@@ -343,8 +343,8 @@ pub fn handle_frame(
     let ext = codec_ext(spec.codec);
     let tier = image_tier(spec.tier);
 
-    // pi-sender/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}
-    let mut path = PathBuf::from("pi-sender/sample");
+    // roadside-unit/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}
+    let mut path = PathBuf::from("roadside-unit/sample");
     path.push(folder_res);
     path.push(folder_codec);
     path.push(format!("seq3-drone_{:07}_{}.{}", frame_number, tier, ext));
