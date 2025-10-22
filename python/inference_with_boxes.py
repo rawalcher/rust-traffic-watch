@@ -1,6 +1,13 @@
-import os, re, sys, glob, random, subprocess
+import glob
+import os
+import random
+import re
+import subprocess
+import sys
 from typing import List
+
 import cv2
+
 from inference_pytorch import PersistentPyTorchInferenceServer
 
 CONF_RED_THRESHOLD = 0.50

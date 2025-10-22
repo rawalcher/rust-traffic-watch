@@ -5,16 +5,11 @@ edition = "2021"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-bincode = "1.3"
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0.140"
 log = "0.4.27"
-once_cell = "1.21.3"
-anyhow = "1.0.98"
 tracing = "0.1.41"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-png = "0.17"
-mozjpeg = "0.10"
-webp = "0.3"
+common = { path = "../crates/common"}
+protocol = { path = "../crates/protocol"}
 strum_macros = "0.27.2"
-libc = "0.2.172"
+bincode = "1.0.1"

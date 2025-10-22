@@ -71,8 +71,8 @@ On Jetson, convert ONNX models to TensorRT engines:
 TODO: Rewrite Script to Engine Files are properly Placed
 
 ```bash
-chmod +x jetson-receiver/export_engines.sh
-./jetson-receiver/export_engines.sh
+chmod +x zone-processor/export_engines.sh
+./zone-processor/export_engines.sh
 ```
 
 ---

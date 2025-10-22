@@ -1,11 +1,11 @@
 import io
 import json
+import os
 import struct
 import sys
-import warnings
-import time
 import threading
-import os
+import time
+import warnings
 
 import torch
 from PIL import Image

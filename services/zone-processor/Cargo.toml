@@ -1,0 +1,13 @@
+[package]
+name = "zone-processor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+shared = { path = "../../shared" }
+common = { path = "../../crates/common"}
+protocol = { path = "../../crates/protocol"}
+network = { path = "../../crates/network"}
+log = "0.4.27"
+tracing-subscriber = "0.3.20"

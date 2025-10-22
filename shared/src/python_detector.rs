@@ -1,9 +1,10 @@
-use crate::types::*;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
+use protocol::{Detection, FrameMessage, InferenceResult, ObjectCounts};
+use common::time::current_timestamp_micros;
 
 pub struct PersistentPythonDetector {
     process: Option<Child>,

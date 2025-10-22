@@ -51,8 +51,8 @@ Start the components:
 
 ```bash
 cargo run --release --bin controller
-cargo run --release --bin jetson-receiver   # on Jetson
-cargo run --release --bin pi-sender         # on Pi
+cargo run --release --bin zone-processor   # on Jetson
+cargo run --release --bin roadside-unit         # on Pi
 ```
 
 Run an experiment:

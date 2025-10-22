@@ -1,3 +1,6 @@
+// TODO: SPLIT UP MORE
+
+use codec::types::{ImageCodecKind, ImageResolutionType};
 
 pub const CONTROLLER_PORT: u16 = 9090;
 pub const JETSON_PORT: u16 = 9092;
@@ -21,54 +24,6 @@ pub const PYTHON_VENV_PATH: &str = "python3";
 pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
 pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum Tier {
-    T1,  // High quality / slower compression
-    T2,  // Balanced
-    T3   // Low quality / fast compression
-}
-
-impl Tier {
-    pub const ALL: [Tier; 3] = [Tier::T1, Tier::T2, Tier::T3];
-
-    #[inline]
-    pub fn idx(self) -> usize {
-        match self {
-            Tier::T1 => 0,
-            Tier::T2 => 1,
-            Tier::T3 => 2
-        }
-    }
-}
-
-// PNG: Lossless compression - zlib levels
-pub const PNG_ZLIB_LEVEL: [u8; 3] = [
-    6,
-    3,
-    1
-];
-
-// JPEG: Lossy - quality scale 0-100
-pub const JPEG_QUALITY: [u8; 3] = [
-    90,
-    75,
-    60
-];
-
-// WebP Lossy: quality scale 0-100
-pub const WEBP_LOSSY_QUALITY: [f32; 3] = [
-    90.0,
-    75.0,
-    60.0
-];
-
-// WebP Lossless: method 0-6 (compression effort)
-pub const WEBP_LOSSLESS_METHOD: [i32; 3] = [
-    6,  // T1: Best compression
-    3,  // T2: Balanced
-    0   // T3: Fast (minimal compression)
-];
-
 pub fn controller_address() -> String {
     format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_PORT)
 }
@@ -90,45 +45,11 @@ pub fn get_frame_skip() -> Result<u64, &'static str> {
     Ok(skip.max(1))
 }
 
-pub mod tiers {
-    use super::*;
-
-    #[inline]
-    pub fn png_level(t: Tier) -> u8 {
-        PNG_ZLIB_LEVEL[t.idx()]
-    }
-
-    #[inline]
-    pub fn png_compression(t: Tier) -> png::Compression {
-        match png_level(t) {
-            1 => png::Compression::Fast,
-            3 => png::Compression::Default,
-            6 => png::Compression::Default,
-            _ => png::Compression::Default,
-        }
-    }
-
-    #[inline]
-    pub fn jpeg_quality(t: Tier) -> u8 {
-        JPEG_QUALITY[t.idx()]
-    }
-
-    #[inline]
-    pub fn webp_lossy_quality(t: Tier) -> f32 {
-        WEBP_LOSSY_QUALITY[t.idx()]
-    }
-
-    #[inline]
-    pub fn webp_lossless_method(t: Tier) -> i32 {
-        WEBP_LOSSLESS_METHOD[t.idx()]
-    }
-}
-
 pub fn res_folder(res: ImageResolutionType) -> &'static str {
     match res {
         ImageResolutionType::FHD => "FHD",
         ImageResolutionType::HD => "HD",
-        ImageResolutionType::LETTERBOX => "640",
+        ImageResolutionType::Letterbox => "640",
     }
 }
 
@@ -146,13 +67,5 @@ pub fn codec_ext(codec: ImageCodecKind) -> &'static str {
         ImageCodecKind::JpgLossy => "jpg",
         ImageCodecKind::PngLossless => "png",
         ImageCodecKind::WebpLossy | ImageCodecKind::WebpLossless => "webp",
-    }
-}
-
-pub fn image_tier(tier: Tier) -> &'static str {
-    match tier {
-        Tier::T1 => "T1",
-        Tier::T2 => "T2",
-        Tier::T3 => "T3"
     }
 }

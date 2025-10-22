@@ -14,13 +14,13 @@ cargo run --release --bin controller
 **Jetson Receiver** (on NVIDIA Jetson):
 
 ```bash
-cargo run --release --bin jetson-receiver
+cargo run --release --bin zone-processor
 ```
 
 **Pi Sender** (on Raspberry Pi):
 
 ```bash
-cargo run --release --bin pi-sender
+cargo run --release --bin roadside-unit
 ```
 
 ---

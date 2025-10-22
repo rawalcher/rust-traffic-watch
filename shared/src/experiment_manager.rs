@@ -1,10 +1,10 @@
-use crate::types::*;
 use crate::python_detector::PersistentPythonDetector;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{sleep, timeout, Duration};
 use tracing::{debug, error, info, warn};
+use protocol::{ExperimentConfig, FrameMessage, InferenceMessage};
 
 pub struct ExperimentManager {
     detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
