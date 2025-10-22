@@ -231,9 +231,9 @@ pub fn perform_python_inference_with_counts(
 ) -> Result<InferenceResult, String> {
     let image_bytes = &frame_message.frame.frame_data;
 
-    let start = Some(current_timestamp_micros());
+    let start = current_timestamp_micros();
     let result = detector.detect_objects(image_bytes)?;
-    let duration = Some(current_timestamp_micros() - start.unwrap()).unwrap();
+    let duration = current_timestamp_micros() - start;
 
     Ok(InferenceResult {
         sequence_id: frame_message.sequence_id,

@@ -3,6 +3,7 @@
     <words>
       <w>jpglossy</w>
       <w>libwebp</w>
+      <w>outdir</w>
       <w>pnglossless</w>
       <w>webglossless</w>
       <w>webplossy</w>

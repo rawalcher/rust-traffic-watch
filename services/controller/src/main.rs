@@ -1,6 +1,10 @@
-use std::{env, error::Error};
+mod csv_maker;
+mod experiment;
+mod service;
 
 use csv::Writer;
+use std::{env, error::Error};
+
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{debug, error, info, warn};
@@ -174,10 +178,8 @@ impl ControllerHarness {
 
         while start.elapsed().as_secs() < config.duration_seconds {
             if let Some(sender) = get_device_sender(&DeviceId::RoadsideUnit(0)).await {
-                let mut timing = TimingMetadata::default();
-                timing.sequence_id = sequence_id;
-                timing.controller_sent_pulse = Some(current_timestamp_micros());
-                timing.frame_number = frame_number;
+                // instead of filling with irrelevant data, create with data we already have and ignore rest
+                let timing = TimingMetadata { sequence_id, controller_sent_pulse: Some(current_timestamp_micros()), frame_number, ..Default::default() };
 
                 sender.send(Message::Pulse(timing))?;
                 info!("Sent pulse {} to Pi", sequence_id);
@@ -546,7 +548,7 @@ fn generate_analysis_csv(
     debug!("Saving {} results to {}", results.len(), filename);
     let mut writer = Writer::from_path(&filename)?;
 
-    writer.write_record(&[
+    writer.write_record([
         "sequence_id",
         "frame_number",
         "pi_hostname",

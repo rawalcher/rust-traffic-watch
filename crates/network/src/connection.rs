@@ -61,7 +61,7 @@ pub async fn wait_for_pi_on_jetson(role: Role) -> tokio::io::Result<()> {
 
     handle_device_connection(stream, role)
         .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 pub async fn handle_device_connection(stream: TcpStream, role: Role) -> Result<()> {

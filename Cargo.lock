@@ -232,7 +232,6 @@ dependencies = [
  "csv",
  "network",
  "protocol",
- "shared",
  "tokio",
  "tracing",
  "tracing-subscriber",

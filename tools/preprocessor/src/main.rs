@@ -1,4 +1,5 @@
 use anyhow::Context as AnyhowContext;
+use anyhow::Result;
 use codec::types::{EncodingSpec, ImageCodecKind, ImageResolutionType, Tier};
 use codec::ImageCodec;
 use common::constants::{codec_ext, codec_folder, res_folder};
@@ -21,6 +22,8 @@ struct ConversionStats {
     failed: usize,
 }
 
+const OUTPUT_DIR: &str = "roadside-unit/sample";
+
 impl ConversionStats {
     fn new(total: usize) -> Self {
         Self {
@@ -32,7 +35,7 @@ impl ConversionStats {
 
     fn report_success(&mut self) {
         self.succeeded += 1;
-        if self.succeeded % 50 == 0 || self.succeeded == self.total {
+        if self.succeeded.is_multiple_of(50) || self.succeeded == self.total {
             println!("Progress: {}/{} ({:.1}%)",
                      self.succeeded, self.total,
                      (self.succeeded as f32 / self.total as f32) * 100.0
@@ -133,32 +136,20 @@ fn process_single_image(
     Ok(())
 }
 
-fn discover_input_images(input_dir: &Path) -> Result<Vec<ConversionTask>, Box<dyn Error>> {
-    let mut tasks = Vec::new();
-
-    for entry in fs::read_dir(input_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext == "jpg" || ext == "jpeg" || ext == "JPG" || ext == "JPEG" {
-                    if let Some(stem) = path.file_stem() {
-                        let frame_number = stem.to_string_lossy().to_string();
-
-                        tasks.push(ConversionTask {
-                            input_path: path.clone(),
-                            output_base: PathBuf::from("roadside-unit/sample"),
-                            frame_number,
-                        });
-                    }
-                }
+fn discover_input_images(dir: &Path) -> Result<Vec<ConversionTask>> {
+    Ok(fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file()) // no dirs
+        .map(|p| {
+            let frame_number = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_owned();
+            ConversionTask {
+                input_path: p,
+                output_base: PathBuf::from(OUTPUT_DIR),
+                frame_number,
             }
-        }
-    }
-
-    tasks.sort_by(|a, b| a.frame_number.cmp(&b.frame_number));
-    Ok(tasks)
+        })
+        .collect())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
