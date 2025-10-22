@@ -1,5 +1,5 @@
-use crate::types::{Tier, tiers};
-use anyhow::{Result, anyhow};
+use crate::types::{tiers, Tier};
+use anyhow::{anyhow, Result};
 use image::{DynamicImage, ExtendedColorType, ImageEncoder};
 
 pub fn encode_png(img: &DynamicImage, tier: Tier) -> Result<Vec<u8>> {

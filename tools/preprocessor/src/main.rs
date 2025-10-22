@@ -1,13 +1,13 @@
 use anyhow::Context as AnyhowContext;
+use codec::types::{EncodingSpec, ImageCodecKind, ImageResolutionType, Tier};
+use codec::ImageCodec;
+use common::constants::{codec_ext, codec_folder, res_folder};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use codec::ImageCodec;
-use codec::types::{EncodingSpec, ImageCodecKind, ImageResolutionType, Tier};
-use common::constants::{codec_ext, codec_folder, res_folder};
 
 struct ConversionTask {
     input_path: PathBuf,

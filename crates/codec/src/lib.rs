@@ -6,7 +6,7 @@ use crate::decoder::decompress_to_rgb;
 use crate::encoder::{encode_jpeg, encode_png, encode_webp_lossless, encode_webp_lossy};
 use crate::types::{EncodingSpec, Frame, ImageCodecKind};
 use anyhow::{Context, Result};
-use image::{GenericImageView};
+use image::GenericImageView;
 use std::{fs, path::Path};
 
 pub struct ImageCodec;

@@ -2,8 +2,8 @@ use protocol::{ExperimentConfig, FrameMessage, InferenceMessage};
 use shared::python_detector::PersistentPythonDetector;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc, watch};
-use tokio::time::{Duration, sleep, timeout};
+use tokio::sync::{mpsc, watch, Mutex};
+use tokio::time::{sleep, timeout, Duration};
 use tracing::{debug, error, info, warn};
 
 pub struct ExperimentManager {

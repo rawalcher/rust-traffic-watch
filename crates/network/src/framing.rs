@@ -1,10 +1,10 @@
 use anyhow::Result;
 use log::error;
+use protocol::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use protocol::Message;
 
 #[inline]
 pub fn frame_message(msg: &Message) -> Result<Vec<u8>> {
