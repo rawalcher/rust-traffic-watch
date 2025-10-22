@@ -5,15 +5,22 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{debug, error, info, warn};
 
-use std::sync::Arc;
-use codec::types::{EncodingSpec, ImageCodecKind, ImageResolutionType, Tier};
 use codec::types::ImageCodecKind::{JpgLossy, PngLossless, WebpLossless, WebpLossy};
 use codec::types::ImageResolutionType::{Letterbox, FHD, HD};
-use common::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, DEFAULT_SEND_FPS, MAX_FRAME_SEQUENCE, SOURCE_FPS};
+use codec::types::{EncodingSpec, ImageCodecKind, ImageResolutionType, Tier};
+use common::constants::{
+    DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, DEFAULT_SEND_FPS, MAX_FRAME_SEQUENCE, SOURCE_FPS,
+};
 use common::time::current_timestamp_micros;
 use network::connection;
-use network::connection::{get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role};
-use protocol::{ControlMessage, DeviceId, ExperimentConfig, ExperimentMode, InferenceMessage, Message, TimingMetadata};
+use network::connection::{
+    get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role,
+};
+use protocol::{
+    ControlMessage, DeviceId, ExperimentConfig, ExperimentMode, InferenceMessage, Message,
+    TimingMetadata,
+};
+use std::sync::Arc;
 
 struct ControllerHarness {
     active_sink_tx: watch::Sender<Option<mpsc::UnboundedSender<InferenceMessage>>>,
@@ -132,7 +139,7 @@ impl ControllerHarness {
 
         // TODO: rework
         let required_devices = match config.mode {
-            ExperimentMode::LocalOnly => vec![DeviceId::RoadsideUnit(0)],
+            ExperimentMode::Local => vec![DeviceId::RoadsideUnit(0)],
             ExperimentMode::Offload => vec![DeviceId::RoadsideUnit(0), DeviceId::ZoneProcessor(0)],
         };
 
@@ -254,7 +261,7 @@ impl Default for TestConfig {
         Self {
             models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
             fps_values: vec![1.0, 5.0, 10.0],
-            modes: vec![ExperimentMode::LocalOnly, ExperimentMode::Offload],
+            modes: vec![ExperimentMode::Local, ExperimentMode::Offload],
             duration_seconds: DEFAULT_DURATION_SECONDS,
             codecs: vec![JpgLossy, WebpLossy, PngLossless, WebpLossless],
             tiers: vec![Tier::T1, Tier::T2, Tier::T3],
@@ -309,7 +316,7 @@ impl TestConfig {
                         .filter_map(parse_resolution)
                         .collect();
                 }
-                "--local-only" => config.modes = vec![ExperimentMode::LocalOnly],
+                "--local-only" => config.modes = vec![ExperimentMode::Local],
                 "--remote-only" => config.modes = vec![ExperimentMode::Offload],
 
                 "--quick" => {
@@ -358,9 +365,9 @@ async fn run_single_experiment(
         .unwrap_or(DEFAULT_SEND_FPS);
 
     let modes = match args.iter().find(|a| *a == "--local" || *a == "--remote") {
-        Some(flag) if flag == "--local" => vec![ExperimentMode::LocalOnly],
+        Some(flag) if flag == "--local" => vec![ExperimentMode::Local],
         Some(flag) if flag == "--remote" => vec![ExperimentMode::Offload],
-        _ => vec![ExperimentMode::LocalOnly, ExperimentMode::Offload],
+        _ => vec![ExperimentMode::Local, ExperimentMode::Offload],
     };
     let codec = args
         .iter()
@@ -575,7 +582,7 @@ fn generate_analysis_csv(
 
         let network_latency = match config.mode {
             ExperimentMode::Offload => total_latency.saturating_sub(pi_overhead + jetson_overhead),
-            ExperimentMode::LocalOnly => total_latency.saturating_sub(i.processing_time_us),
+            ExperimentMode::Local => total_latency.saturating_sub(i.processing_time_us),
         };
 
         writer.write_record(&[

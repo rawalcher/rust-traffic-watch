@@ -1,10 +1,10 @@
-use crate::python_detector::PersistentPythonDetector;
+use protocol::{ExperimentConfig, FrameMessage, InferenceMessage};
+use shared::python_detector::PersistentPythonDetector;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch, Mutex};
-use tokio::time::{sleep, timeout, Duration};
+use tokio::sync::{Mutex, mpsc, watch};
+use tokio::time::{Duration, sleep, timeout};
 use tracing::{debug, error, info, warn};
-use protocol::{ExperimentConfig, FrameMessage, InferenceMessage};
 
 pub struct ExperimentManager {
     detector: Arc<Mutex<Option<PersistentPythonDetector>>>,
@@ -15,7 +15,10 @@ pub struct ExperimentManager {
 }
 
 impl ExperimentManager {
-    pub fn new(model_name: String, script_path: String) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub fn new(
+        model_name: String,
+        script_path: String,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         info!("Initializing experiment with model '{}'", model_name);
 
         let detector = PersistentPythonDetector::new(model_name, script_path)?;
@@ -32,9 +35,7 @@ impl ExperimentManager {
 
     pub async fn is_ready(&self) -> bool {
         let mut detector_opt = self.detector.lock().await;
-        detector_opt.as_mut()
-            .map(|d| d.is_alive())
-            .unwrap_or(false)
+        detector_opt.as_mut().map(|d| d.is_alive()).unwrap_or(false)
     }
 
     pub fn start_inference<F, Fut>(
@@ -43,8 +44,10 @@ impl ExperimentManager {
         config: ExperimentConfig,
         inference_fn: F,
     ) where
-        F: Fn(FrameMessage, Arc<Mutex<Option<PersistentPythonDetector>>>, ExperimentConfig) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<InferenceMessage, Box<dyn Error + Send + Sync>>> + Send,
+        F: Fn(FrameMessage, Arc<Mutex<Option<PersistentPythonDetector>>>, ExperimentConfig) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<InferenceMessage, Box<dyn Error + Send + Sync>>> + Send,
     {
         let pending_frame = Arc::clone(&self.pending_frame);
         let detector = Arc::clone(&self.detector);
@@ -64,7 +67,10 @@ impl ExperimentManager {
 
                 if let Some(frame_msg) = frame_opt {
                     if *shutdown_rx.borrow() {
-                        info!("Inference task: dropping frame {} due to shutdown", frame_msg.sequence_id);
+                        info!(
+                            "Inference task: dropping frame {} due to shutdown",
+                            frame_msg.sequence_id
+                        );
                         break;
                     }
 
@@ -106,7 +112,10 @@ impl ExperimentManager {
         let seq_id = frame.sequence_id;
 
         if let Some(old) = pending.replace(frame) {
-            info!("Dropped frame {} for newer frame {}", old.sequence_id, seq_id);
+            info!(
+                "Dropped frame {} for newer frame {}",
+                old.sequence_id, seq_id
+            );
         }
         info!("Updated pending frame to sequence_id={}", seq_id);
     }

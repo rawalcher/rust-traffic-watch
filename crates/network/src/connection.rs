@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::constants::{controller_bind_address, jetson_bind_address};
-use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};
 use log::info;
 use once_cell::sync::Lazy;
+use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error, warn};
 
 use crate::framing::{read_message, read_message_stream, send_message};
@@ -17,8 +17,7 @@ pub type DeviceReceiver = mpsc::UnboundedReceiver<Message>;
 
 static DEVICES: Lazy<Mutex<HashMap<DeviceId, DeviceSender>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-static READY_DEVICES: Lazy<Mutex<HashSet<DeviceId>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+static READY_DEVICES: Lazy<Mutex<HashSet<DeviceId>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Clone)]
 pub enum Role {
@@ -101,10 +100,7 @@ pub async fn handle_device_connection(stream: TcpStream, role: Role) -> Result<(
                     (Role::Controller { result_handler }, Message::Result(result)) => {
                         let _ = result_handler.send(result);
                     }
-                    (
-                        Role::Controller { .. },
-                        Message::Control(ControlMessage::ReadyToStart),
-                    ) => {
+                    (Role::Controller { .. }, Message::Control(ControlMessage::ReadyToStart)) => {
                         mark_device_ready(device_id).await;
                         info!("{device_id:?} is now ready");
                     }

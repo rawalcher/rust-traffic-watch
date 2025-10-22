@@ -1,7 +1,14 @@
 mod service;
 
+use common::constants::{controller_address, jetson_bind_address, INFERENCE_TENSORRT_PATH};
+use common::time::current_timestamp_micros;
+use inference::experiment_manager::ExperimentManager;
 use log::{debug, error, info, warn};
-use shared::experiment_manager::ExperimentManager;
+use network::framing::{read_message, read_message_stream, spawn_writer};
+use protocol::{
+    ControlMessage, DeviceId, ExperimentConfig, FrameMessage, InferenceMessage, Message,
+};
+use shared::perform_python_inference_with_counts;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,11 +16,9 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
-use common::constants::{controller_address, jetson_bind_address, INFERENCE_TENSORRT_PATH};
-use common::time::current_timestamp_micros;
-use network::framing::{read_message, read_message_stream, spawn_writer};
-use protocol::{ControlMessage, DeviceId, ExperimentConfig, FrameMessage, InferenceMessage, Message};
-use shared::perform_python_inference_with_counts;
+
+// TODO: handle pi connections more gracefully, for future implementation we want to always listen to new pi connections since
+// if one disconnects we just want to continue when reconnected. the jetson acts as an server that "exposes" the inference
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -187,7 +192,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 // TODO: decide on what capacity each message should operate
                 let ctrl_tx = spawn_writer(ctrl_writer, 10);
 
-                ctrl_tx.send(Message::Hello(DeviceId::ZoneProcessor(0))).await.ok();
+                ctrl_tx
+                    .send(Message::Hello(DeviceId::ZoneProcessor(0)))
+                    .await
+                    .ok();
 
                 loop {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {

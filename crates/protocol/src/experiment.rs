@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use codec::types::EncodingSpec;
 use common::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_SEND_FPS};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentConfig {
@@ -14,7 +14,7 @@ pub struct ExperimentConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExperimentMode {
-    LocalOnly,
+    Local,
     Offload,
 }
 

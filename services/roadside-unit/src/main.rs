@@ -1,9 +1,20 @@
-mod service;
 mod frame_loader;
+mod service;
 
+use codec::types::{EncodingSpec, Frame};
+use common::constants::{
+    codec_ext, codec_folder, controller_address, jetson_address, res_folder, INFERENCE_PYTORCH_PATH,
+};
+use common::time::current_timestamp_micros;
 use image::GenericImageView;
+use inference::experiment_manager::ExperimentManager;
 use log::{debug, error, info, warn};
-use shared::experiment_manager::ExperimentManager;
+use network::framing::{read_message, spawn_writer};
+use protocol::{
+    ControlMessage, DeviceId, ExperimentConfig, ExperimentMode, FrameMessage, InferenceMessage,
+    Message, TimingMetadata,
+};
+use shared::perform_python_inference_with_counts;
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -11,12 +22,6 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-use codec::types::{EncodingSpec, Frame};
-use common::constants::{codec_ext, codec_folder, controller_address, jetson_address, res_folder, INFERENCE_PYTORCH_PATH};
-use common::time::current_timestamp_micros;
-use network::framing::{read_message, spawn_writer};
-use protocol::{ControlMessage, DeviceId, ExperimentConfig, ExperimentMode, FrameMessage, InferenceMessage, Message, TimingMetadata};
-use shared::perform_python_inference_with_counts;
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -33,7 +38,7 @@ async fn run_experiment_cycle(
     };
 
     match config.mode {
-        ExperimentMode::LocalOnly => {
+        ExperimentMode::Local => {
             handle_local_experiment(ctrl_reader, ctrl_tx, config).await?;
         }
         ExperimentMode::Offload => {

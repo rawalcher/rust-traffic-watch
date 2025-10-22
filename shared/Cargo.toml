@@ -5,11 +5,7 @@ edition = "2021"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0.140"
 log = "0.4.27"
-tracing = "0.1.41"
 common = { path = "../crates/common"}
 protocol = { path = "../crates/protocol"}
-strum_macros = "0.27.2"
-bincode = "1.0.1"
