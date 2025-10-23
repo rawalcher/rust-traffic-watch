@@ -1,6 +1,7 @@
 use codec::types::EncodingSpec;
 use common::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_SEND_FPS};
 use serde::{Deserialize, Serialize};
+use strum_macros::Display;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentConfig {
@@ -12,7 +13,7 @@ pub struct ExperimentConfig {
     pub fixed_fps: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
 pub enum ExperimentMode {
     Local,
     Offload,

@@ -33,7 +33,7 @@ struct ControllerHarness {
 }
 
 impl ControllerHarness {
-    async fn new() -> Self {
+    fn new() -> Self {
         let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
         let listener_task = tokio::spawn(async move {
@@ -90,9 +90,8 @@ impl ControllerHarness {
                         );
                         sleep(Duration::from_secs(30)).await;
                         continue;
-                    } else {
-                        return Err(e);
                     }
+                    return Err(e);
                 }
                 Err(e) => {
                     return Err(e);
@@ -179,7 +178,12 @@ impl ControllerHarness {
         while start.elapsed().as_secs() < config.duration_seconds {
             if let Some(sender) = get_device_sender(&DeviceId::RoadsideUnit(0)).await {
                 // instead of filling with irrelevant data, create with data we already have and ignore rest
-                let timing = TimingMetadata { sequence_id, controller_sent_pulse: Some(current_timestamp_micros()), frame_number, ..Default::default() };
+                let timing = TimingMetadata {
+                    sequence_id,
+                    controller_sent_pulse: Some(current_timestamp_micros()),
+                    frame_number,
+                    ..Default::default()
+                };
 
                 sender.send(Message::Pulse(timing))?;
                 info!("Sent pulse {} to Pi", sequence_id);
@@ -357,8 +361,10 @@ async fn run_single_experiment(
     let model_name = args
         .iter()
         .find(|arg| arg.starts_with("--model="))
-        .map(|arg| arg.trim_start_matches("--model=").to_string())
-        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        .map_or_else(
+            || DEFAULT_MODEL.to_string(),
+            |arg| arg.trim_start_matches("--model=").to_string(),
+        );
 
     let fps = args
         .iter()
@@ -396,10 +402,7 @@ async fn run_single_experiment(
     };
 
     for mode in modes {
-        let experiment_id = format!(
-            "{:?}_{}_{}fps_{:?}_{:?}_{:?}",
-            mode, model_name, fps, codec, tier, resolution
-        );
+        let experiment_id = format!("{mode}_{model_name}_{fps}fps_{codec}_{tier}_{resolution}");
 
         let mut config = ExperimentConfig::new(
             experiment_id.clone(),
@@ -447,10 +450,8 @@ async fn run_test_suite(
                         for resolution in &test_config.resolutions {
                             current += 1;
 
-                            let experiment_id = format!(
-                                "{:?}_{}_{}fps_{:?}_{:?}_{:?}",
-                                mode, model, fps, codec, tier, resolution
-                            );
+                            let experiment_id =
+                                format!("{mode}_{model}_{fps}fps_{codec}_{tier}_{resolution}", );
 
                             info!("Experiment {}/{}: {}", current, total, experiment_id);
 
@@ -468,7 +469,7 @@ async fn run_test_suite(
                             config.duration_seconds = test_config.duration_seconds;
 
                             match harness.run_controller_with_retry(config, 3).await {
-                                Ok(_) => info!("Experiment {} complete", experiment_id),
+                                Ok(()) => info!("Experiment {} complete", experiment_id),
                                 Err(e) => error!("Experiment {} failed: {}", experiment_id, e),
                             }
 
@@ -494,7 +495,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
     let args: Vec<String> = env::args().collect();
 
-    let harness = ControllerHarness::new().await;
+    let harness = ControllerHarness::new();
 
     if args.iter().any(|a| a.starts_with("--model=")) {
         run_single_experiment(&args, &harness).await
@@ -543,7 +544,7 @@ fn generate_analysis_csv(
 
     std::fs::create_dir_all("logs")?;
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("logs/experiment_{}_{}.csv", experiment_id, timestamp);
+    let filename = format!("logs/experiment_{experiment_id}_{timestamp}.csv");
 
     debug!("Saving {} results to {}", results.len(), filename);
     let mut writer = Writer::from_path(&filename)?;

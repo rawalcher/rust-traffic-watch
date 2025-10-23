@@ -97,7 +97,7 @@ async fn handle_local_experiment(
     .await;
 
     if let Err(e) = manager.shutdown().await {
-        error!("Manager shutdown error: {}", e);
+        error!("Manager shutdown error: {e}");
     }
     sleep(Duration::from_secs(2)).await;
 
@@ -125,7 +125,7 @@ async fn run_local_experiment_loop(
                         timing.pi_capture_start = Some(current_timestamp_micros());
                         let frame_number = timing.frame_number;
 
-                        match handle_frame(frame_number, config.encoding_spec.clone()) {
+                        match handle_frame(frame_number, &config.encoding_spec.clone()) {
                             Ok((frame_data, width, height)) => {
                                 debug!(
                                     "Loaded frame {} ({:?}, tier={:?}, res={:?}) -> {} bytes",
@@ -149,7 +149,7 @@ async fn run_local_experiment_loop(
 
                                 manager.update_pending_frame(frame_msg).await;
                             }
-                            Err(e) => error!("Failed to load frame {}: {}", frame_number, e),
+                            Err(e) => error!("Failed to load frame {frame_number}: {e}"),
                         }
                     }
                     Message::Control(ControlMessage::Shutdown) => {
@@ -157,7 +157,7 @@ async fn run_local_experiment_loop(
                         return Ok(());
                     }
 
-                    msg => warn!("Unexpected message during experiment: {:?}", msg),
+                    msg => warn!("Unexpected message during experiment: {msg:?}"),
                 }
             }
         }
@@ -186,10 +186,7 @@ async fn handle_offload_experiment(
                 break tx;
             }
             Err(e) => {
-                warn!(
-                    "Failed to connect to Jetson: {}. Retrying in 2 seconds...",
-                    e
-                );
+                warn!("Failed to connect to Jetson: {e}. Retrying in 2 seconds...");
                 sleep(Duration::from_secs(2)).await;
             }
         }
@@ -213,7 +210,7 @@ async fn handle_offload_experiment(
                         // Frame loaded and sent successfully
                     }
                     Err(e) => {
-                        error!("Failed to handle remote frame: {}", e);
+                        error!("Failed to handle remote frame: {e}");
                     }
                 }
             }
@@ -221,7 +218,7 @@ async fn handle_offload_experiment(
                 info!("Experiment cycle complete, resetting for next experiment");
                 break;
             }
-            msg => warn!("Unexpected message during experiment: {:?}", msg),
+            msg => warn!("Unexpected message during experiment: {msg:?}"),
         }
     }
 
@@ -250,24 +247,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
                         Ok(true) => {
                             info!("Ready for next experiment");
-                            continue;
                         }
                         Ok(false) => {
                             info!("Clean shutdown received");
                             break;
                         }
                         Err(e) => {
-                            error!("Experiment cycle error: {}", e);
+                            error!("Experiment cycle error: {e}");
                             break;
                         }
                     }
                 }
             }
             Err(e) => {
-                error!(
-                    "Failed to connect to controller: {}. Retrying in 10 seconds...",
-                    e
-                );
+                error!("Failed to connect to controller: {e}. Retrying in 10 seconds...");
             }
         }
 
@@ -287,7 +280,7 @@ async fn wait_for_experiment_config(
             Message::Control(ControlMessage::Shutdown) => {
                 return Err("Shutdown before experiment started".into());
             }
-            msg => warn!("Waiting for config, got: {:?}", msg),
+            msg => warn!("Waiting for config, got: {msg:?}"),
         }
     }
 }
@@ -299,7 +292,7 @@ async fn wait_for_experiment_start(
         match read_message(reader).await? {
             Message::Control(ControlMessage::BeginExperiment) => return Ok(()),
             Message::Control(ControlMessage::Shutdown) => return Err("Shutdown during wait".into()),
-            msg => warn!("Waiting for start, got: {:?}", msg),
+            msg => warn!("Waiting for start, got: {msg:?}"),
         }
     }
 }
@@ -312,7 +305,7 @@ async fn handle_frame_remote(
     timing.pi_capture_start = Some(current_timestamp_micros());
 
     let frame_number = timing.frame_number;
-    let (frame_data, width, height) = handle_frame(frame_number, config.encoding_spec.clone())?;
+    let (frame_data, width, height) = handle_frame(frame_number, &config.encoding_spec)?;
 
     debug!(
         "Loaded frame {} for offload ({:?}, tier={:?}, res={:?}) -> {} bytes",
@@ -344,9 +337,12 @@ async fn handle_frame_remote(
     Ok(())
 }
 
+/// # Errors
+///
+/// Will return `Err` if no frame is Found at given Path
 pub fn handle_frame(
     frame_number: u64,
-    spec: EncodingSpec,
+    spec: &EncodingSpec,
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error + Send + Sync>> {
     let folder_res = res_folder(spec.resolution);
     let folder_codec = codec_folder(spec.codec);
@@ -357,10 +353,10 @@ pub fn handle_frame(
     let mut path = PathBuf::from("roadside-unit/sample");
     path.push(folder_res);
     path.push(folder_codec);
-    path.push(format!("seq3-drone_{:07}_{}.{}", frame_number, tier, ext));
+    path.push(format!("seq3-drone_{frame_number:07}_{tier}.{ext}"));
 
     if !path.exists() {
-        return Err(format!("Frame file not found: {:?}", path).into());
+        return Err(format!("Frame file not found: {:?}", path.display()).into());
     }
 
     let frame_data = std::fs::read(&path)?;

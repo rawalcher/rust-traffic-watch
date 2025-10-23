@@ -15,6 +15,9 @@ pub struct ExperimentManager {
 }
 
 impl ExperimentManager {
+    /// # Errors
+    ///
+    /// Will return an `Err` if inference failed.
     pub fn new(
         model_name: String,
         script_path: String,
@@ -35,7 +38,7 @@ impl ExperimentManager {
 
     pub async fn is_ready(&self) -> bool {
         let mut detector_opt = self.detector.lock().await;
-        detector_opt.as_mut().map(|d| d.is_alive()).unwrap_or(false)
+        detector_opt.as_mut().is_some_and(PersistentPythonDetector::is_alive)
     }
 
     pub fn start_inference<F, Fut>(
@@ -96,7 +99,7 @@ impl ExperimentManager {
                                 break;
                             }
                         }
-                        _ = sleep(Duration::from_millis(10)) => {}
+                        () = sleep(Duration::from_millis(10)) => {}
                     }
                 }
             }
@@ -125,6 +128,9 @@ impl ExperimentManager {
         *pending = None;
     }
 
+    /// # Errors
+    ///
+    /// Will return `Err` if Detector does not properly Shutdown
     pub async fn shutdown(&mut self) -> Result<(), String> {
         info!("Beginning experiment shutdown sequence");
 
@@ -145,7 +151,7 @@ impl ExperimentManager {
             let mut detector_opt = self.detector.lock().await;
             if let Some(mut detector) = detector_opt.take() {
                 match detector.shutdown() {
-                    Ok(_) => info!("Detector shutdown successful"),
+                    Ok(()) => info!("Detector shutdown successful"),
                     Err(e) => error!("Detector shutdown error: {}", e),
                 }
             }
