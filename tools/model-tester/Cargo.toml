@@ -1,0 +1,13 @@
+[package]
+name = "model-tester"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+imageproc = "0.23"
+rusttype = "0.9"
+inference = { path = "../../crates/inference" }
+protocol = { path = "../../crates/protocol" }
+image = "0.24.9"
+tracing = "0.1.41"

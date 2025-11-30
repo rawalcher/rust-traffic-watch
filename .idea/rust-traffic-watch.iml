@@ -18,6 +18,7 @@
       <sourceFolder url="file://$MODULE_DIR$/services/controller/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/shared/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/protocol/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tools/model-tester/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

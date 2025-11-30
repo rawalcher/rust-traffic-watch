@@ -22,7 +22,7 @@ struct ConversionStats {
     failed: usize,
 }
 
-const OUTPUT_DIR: &str = "roadside-unit/sample";
+const OUTPUT_DIR: &str = "services/roadside-unit/sample";
 
 impl ConversionStats {
     fn new(total: usize) -> Self {
