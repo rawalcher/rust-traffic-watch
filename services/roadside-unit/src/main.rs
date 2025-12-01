@@ -1,15 +1,14 @@
 mod frame_loader;
 mod service;
 
+use codec::types::tiers::{codec_name, res_folder};
 use codec::types::{EncodingSpec, Frame};
-use common::constants::{
-    codec_name, controller_address, jetson_address, res_folder, INFERENCE_PYTORCH_PATH,
-};
-use common::time::current_timestamp_micros;
 use image::GenericImageView;
 use inference::experiment_manager::ExperimentManager;
 use log::{debug, error, info, warn};
 use network::framing::{read_message, spawn_writer};
+use protocol::constants::{INFERENCE_PYTORCH_PATH, controller_address, jetson_address};
+use protocol::time::current_timestamp_micros;
 use protocol::{
     ControlMessage, DeviceId, ExperimentConfig, ExperimentMode, FrameMessage, InferenceMessage,
     Message, TimingMetadata,
@@ -18,8 +17,8 @@ use shared::perform_python_inference_with_counts;
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpStream;
+use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 

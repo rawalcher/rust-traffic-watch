@@ -5,7 +5,7 @@ use tracing::{error, info};
 use codec::types::ImageCodecKind::{JpgLossy, PngLossless, WebpLossless, WebpLossy};
 use codec::types::ImageResolutionType::{Letterbox, FHD, HD};
 use codec::types::{EncodingSpec, ImageCodecKind, ImageResolutionType, Tier};
-use common::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, SEND_FPS};
+use protocol::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, SEND_FPS};
 use protocol::{ExperimentConfig, ExperimentMode};
 
 use super::service::ControllerHarness;

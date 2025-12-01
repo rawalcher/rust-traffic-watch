@@ -94,4 +94,20 @@ pub mod tiers {
     pub fn webp_lossless_method(t: Tier) -> i32 {
         WEBP_LOSSLESS_METHOD[t.idx()]
     }
+
+    pub fn res_folder(res: ImageResolutionType) -> &'static str {
+        match res {
+            ImageResolutionType::FHD => "FHD",
+            ImageResolutionType::HD => "HD",
+            ImageResolutionType::Letterbox => "640",
+        }
+    }
+
+    pub fn codec_name(codec: ImageCodecKind) -> &'static str {
+        match codec {
+            ImageCodecKind::JpgLossy => "jpg",
+            ImageCodecKind::PngLossless => "png",
+            ImageCodecKind::WebpLossy | ImageCodecKind::WebpLossless => "webp",
+        }
+    }
 }

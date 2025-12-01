@@ -6,8 +6,8 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{debug, info, warn};
 
-use common::constants::{compute_skip, fps_to_interval, MAX_FRAME_SEQUENCE};
-use common::time::current_timestamp_micros;
+use protocol::constants::{compute_skip, fps_to_interval, MAX_FRAME_SEQUENCE};
+use protocol::time::current_timestamp_micros;
 use network::connection;
 use network::connection::{
     get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role,

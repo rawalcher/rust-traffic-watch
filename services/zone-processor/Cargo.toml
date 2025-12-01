@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 tokio = { workspace = true }
 shared = { path = "../../shared" }
-common = { path = "../../crates/common"}
 protocol = { path = "../../crates/protocol"}
 network = { path = "../../crates/network"}
 inference = { path = "../../crates/inference"}

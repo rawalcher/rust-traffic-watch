@@ -1,7 +1,7 @@
 mod service;
 
-use common::constants::{controller_address, jetson_bind_address, INFERENCE_TENSORRT_PATH};
-use common::time::current_timestamp_micros;
+use protocol::constants::{controller_address, jetson_bind_address, INFERENCE_TENSORRT_PATH};
+use protocol::time::current_timestamp_micros;
 use inference::experiment_manager::ExperimentManager;
 use log::{debug, error, info, warn};
 use network::framing::{read_message, read_message_stream, spawn_writer};

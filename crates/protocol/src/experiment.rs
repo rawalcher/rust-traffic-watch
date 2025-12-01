@@ -1,5 +1,5 @@
 use codec::types::EncodingSpec;
-use common::constants::{DEFAULT_DURATION_SECONDS, SEND_FPS};
+use crate::constants::{DEFAULT_DURATION_SECONDS, SEND_FPS};
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 

@@ -1,4 +1,4 @@
-use common::time::current_timestamp_micros;
+use protocol::time::current_timestamp_micros;
 use log::{debug, error, info, warn};
 use protocol::{Detection, FrameMessage, InferenceResult, ObjectCounts};
 use serde::{Deserialize, Serialize};

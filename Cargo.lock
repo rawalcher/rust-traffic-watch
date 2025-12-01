@@ -258,19 +258,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
-name = "common"
-version = "0.1.0"
-dependencies = [
- "codec",
-]
-
-[[package]]
 name = "controller"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "codec",
- "common",
  "csv",
  "network",
  "protocol",
@@ -1128,7 +1120,6 @@ name = "network"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "common",
  "log",
  "once_cell",
  "postcard",
@@ -1461,7 +1452,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "codec",
- "common",
  "image 0.25.8",
  "log",
  "rayon",
@@ -1500,7 +1490,6 @@ name = "protocol"
 version = "0.1.0"
 dependencies = [
  "codec",
- "common",
  "serde",
  "strum_macros",
 ]
@@ -1723,7 +1712,6 @@ name = "roadside-unit"
 version = "0.1.0"
 dependencies = [
  "codec",
- "common",
  "image 0.25.8",
  "inference",
  "log",
@@ -1916,7 +1904,6 @@ dependencies = [
 name = "shared"
 version = "0.1.0"
 dependencies = [
- "common",
  "log",
  "protocol",
  "serde",
@@ -2769,7 +2756,6 @@ checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
 name = "zone-processor"
 version = "0.1.0"
 dependencies = [
- "common",
  "inference",
  "log",
  "network",

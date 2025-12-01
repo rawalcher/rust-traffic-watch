@@ -8,9 +8,6 @@
       <package file="$PROJECT_DIR$/crates/codec">
         <feature name="default" enabled="true" />
       </package>
-      <package file="$PROJECT_DIR$/crates/common">
-        <feature name="default" enabled="true" />
-      </package>
       <package file="$PROJECT_DIR$/services/controller">
         <feature name="default" enabled="true" />
       </package>
@@ -41,11 +38,30 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="streamlined controller, cleaned up general flow + clippy pedantic">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/common/src/constants.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/common/src/constants.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/codec/src/types.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/codec/src/types.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/common/Cargo.toml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/common/src/config.rs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/common/src/constants.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/constants.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/common/src/lib.rs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/common/src/time.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/time.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/connection.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/connection.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/protocol/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/Cargo.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/protocol/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/experiment.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/protocol/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/lib.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/experiment.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/service.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/shared/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/shared/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/shared/src/python_detector.rs" beforeDir="false" afterPath="$PROJECT_DIR$/shared/src/python_detector.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tools/preprocessor/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/tools/preprocessor/Cargo.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tools/preprocessor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tools/preprocessor/src/main.rs" afterDir="false" />
     </list>
@@ -108,6 +124,11 @@
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\Raphael\RustroverProjects\rust-traffic-watch\crates\protocol\src" />
+    </key>
+  </component>
   <component name="RunManager" selected="Cargo.Clippy">
     <configuration name="Build" type="CargoCommandRunConfiguration" factoryName="Cargo Command" nameIsGenerated="true">
       <option name="buildProfileId" value="dev" />
@@ -162,6 +183,15 @@
       <workItem from="1760972004579" duration="1209000" />
       <workItem from="1760977878278" duration="905000" />
     </task>
+    <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
+      <option name="closed" value="true" />
+      <created>1764620551911</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1764620551911</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -177,6 +207,10 @@
         </entry>
       </map>
     </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="streamlined controller, cleaned up general flow + clippy pedantic" />
+    <option name="LAST_COMMIT_MESSAGE" value="streamlined controller, cleaned up general flow + clippy pedantic" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

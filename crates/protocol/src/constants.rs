@@ -1,7 +1,4 @@
-// TODO: SPLIT UP MORE
-
 use std::time::Duration;
-use codec::types::{ImageCodecKind, ImageResolutionType};
 
 pub const CONTROLLER_PORT: u16 = 9090;
 pub const JETSON_PORT: u16 = 9092;
@@ -21,9 +18,11 @@ pub const MAX_FRAME_SEQUENCE: u64 = 30000;
 pub const FRAME_WIDTH: u32 = 1920;
 pub const FRAME_HEIGHT: u32 = 1080;
 
+/// will be removed
 pub const PYTHON_VENV_PATH: &str = "python3";
 pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
 pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
+/// will be removed
 
 #[must_use]
 pub fn fps_to_interval(fps: u64) -> Duration {
@@ -54,20 +53,4 @@ pub fn jetson_address() -> String {
 
 pub fn jetson_bind_address() -> String {
     format!("0.0.0.0:{}", JETSON_PORT)
-}
-
-pub fn res_folder(res: ImageResolutionType) -> &'static str {
-    match res {
-        ImageResolutionType::FHD => "FHD",
-        ImageResolutionType::HD => "HD",
-        ImageResolutionType::Letterbox => "640",
-    }
-}
-
-pub fn codec_name(codec: ImageCodecKind) -> &'static str {
-    match codec {
-        ImageCodecKind::JpgLossy => "jpg",
-        ImageCodecKind::PngLossless => "png",
-        ImageCodecKind::WebpLossy | ImageCodecKind::WebpLossless => "webp",
-    }
 }
