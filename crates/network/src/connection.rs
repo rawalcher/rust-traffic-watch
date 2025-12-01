@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::Result;
-use protocol::constants::{controller_bind_address, jetson_bind_address};
+use protocol::config::{controller_bind_address, jetson_bind_address};
 use log::info;
 use once_cell::sync::Lazy;
 use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};

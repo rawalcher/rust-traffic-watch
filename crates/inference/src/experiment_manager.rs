@@ -1,9 +1,11 @@
-use protocol::{ExperimentConfig, FrameMessage, InferenceMessage};
+use protocol::types::ExperimentConfig;
+use protocol::{FrameMessage, InferenceMessage};
 use shared::python_detector::PersistentPythonDetector;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex};
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
 
 pub struct ExperimentManager {
@@ -115,10 +117,7 @@ impl ExperimentManager {
         let seq_id = frame.sequence_id;
 
         if let Some(old) = pending.replace(frame) {
-            info!(
-                "Dropped frame {} for newer frame {}",
-                old.sequence_id, seq_id
-            );
+            info!("Dropped frame {} for newer frame {}", old.sequence_id, seq_id);
         }
         info!("Updated pending frame to sequence_id={}", seq_id);
     }

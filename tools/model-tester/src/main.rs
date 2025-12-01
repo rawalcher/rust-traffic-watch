@@ -3,6 +3,7 @@ use image::{DynamicImage, Rgba};
 use imageproc::drawing::{draw_filled_rect_mut, draw_hollow_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use inference::engine::OnnxDetector;
+use protocol::types::Detection;
 use rusttype::{Font, Scale};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,10 +14,7 @@ static FONT_DATA: &[u8] = include_bytes!("../fonts/Roboto-Thin.ttf");
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        error!(
-            "Usage: {} <model.onnx> <image.jpg> [font_path.ttf]",
-            args[0]
-        );
+        error!("Usage: {} <model.onnx> <image.jpg> [font_path.ttf]", args[0]);
         std::process::exit(1);
     }
 
@@ -44,7 +42,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_summary(detections: &[protocol::Detection]) {
+fn print_summary(detections: &[Detection]) {
     let mut class_counts: HashMap<&str, usize> = HashMap::new();
     for det in detections {
         *class_counts.entry(&det.class).or_insert(0) += 1;
@@ -61,7 +59,7 @@ fn print_summary(detections: &[protocol::Detection]) {
     info!("{:-^40}\n", "");
 }
 
-fn draw_detections(img: &mut DynamicImage, detections: &[protocol::Detection]) -> Result<()> {
+fn draw_detections(img: &mut DynamicImage, detections: &[Detection]) -> Result<()> {
     let font =
         Font::try_from_bytes(FONT_DATA).ok_or_else(|| anyhow::anyhow!("Failed to load font"))?;
 
@@ -76,12 +74,7 @@ fn draw_detections(img: &mut DynamicImage, detections: &[protocol::Detection]) -
         );
 
         let seed = det.class.bytes().map(|b| b as u32).sum::<u32>();
-        let color = Rgba([
-            ((seed * 50) % 255) as u8,
-            ((seed * 100) % 255) as u8,
-            200,
-            255,
-        ]);
+        let color = Rgba([((seed * 50) % 255) as u8, ((seed * 100) % 255) as u8, 200, 255]);
 
         draw_hollow_rect_mut(img, Rect::at(x, y).of_size(w, h), color);
 
@@ -93,15 +86,7 @@ fn draw_detections(img: &mut DynamicImage, detections: &[protocol::Detection]) -
             Rect::at(x, label_y).of_size((text_w + 8).max(1) as u32, text_h.max(1) as u32);
 
         draw_filled_rect_mut(img, bg_rect, color);
-        draw_text_mut(
-            img,
-            Rgba([255, 255, 255, 255]),
-            x + 4,
-            label_y,
-            scale,
-            &font,
-            &label,
-        );
+        draw_text_mut(img, Rgba([255, 255, 255, 255]), x + 4, label_y, scale, &font, &label);
     }
     Ok(())
 }

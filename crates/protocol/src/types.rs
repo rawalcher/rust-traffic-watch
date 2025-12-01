@@ -1,12 +1,28 @@
+use crate::config::{
+    DEFAULT_DURATION_SECONDS, JPEG_QUALITY, PNG_ZLIB_LEVEL, SEND_FPS, WEBP_LOSSLESS_METHOD,
+    WEBP_LOSSY_QUALITY,
+};
+use image::codecs::png;
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Frame {
-    pub frame_data: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-    pub encoding: EncodingSpec,
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
+pub enum Tier {
+    T1, // Highest Quality/Best Compression
+    T2, // Default/Medium Quality
+    T3, // Lowest Quality/Fastest Compression
+}
+
+impl Tier {
+    pub const ALL: [Self; 3] = [Self::T1, Self::T2, Self::T3];
+
+    pub const fn idx(self) -> usize {
+        match self {
+            Self::T1 => 0,
+            Self::T2 => 1,
+            Self::T3 => 2,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
@@ -15,24 +31,6 @@ pub enum ImageCodecKind {
     PngLossless,
     WebpLossy,
     WebpLossless,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
-pub enum Tier {
-    T1,
-    T2,
-    T3,
-}
-impl Tier {
-    pub const ALL: [Self; 3] = [Self::T1, Self::T2, Self::T3];
-    
-    pub const fn idx(self) -> usize {
-        match self {
-            Self::T1 => 0,
-            Self::T2 => 1,
-            Self::T3 => 2,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
@@ -49,21 +47,69 @@ pub struct EncodingSpec {
     pub resolution: ImageResolutionType,
 }
 
-// PNG: zlib compression levels (1–9, higher = more compression)
-const PNG_ZLIB_LEVEL: [u8; 3] = [6, 3, 1];
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Frame {
+    pub frame_data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub encoding: EncodingSpec,
+}
 
-// JPEG: quality scale (0–100, higher = better quality)
-const JPEG_QUALITY: [u8; 3] = [90, 75, 60];
+#[derive(Debug, Clone, Serialize, Deserialize, Display)]
+pub enum ExperimentMode {
+    Local,
+    Offload,
+}
 
-// WebP Lossy: quality scale (0–100)
-const WEBP_LOSSY_QUALITY: [f32; 3] = [90.0, 75.0, 60.0];
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExperimentConfig {
+    pub experiment_id: String,
+    pub model_name: String,
+    pub mode: ExperimentMode,
+    pub encoding_spec: EncodingSpec,
+    pub duration_seconds: u64,
+    pub fixed_fps: u64,
+}
 
-// WebP Lossless: method 0–6 (compression effort)
-const WEBP_LOSSLESS_METHOD: [i32; 3] = [6, 3, 0];
+impl ExperimentConfig {
+    pub fn new(
+        experiment_id: String,
+        mode: ExperimentMode,
+        model_name: String,
+        encoding_spec: EncodingSpec,
+    ) -> Self {
+        Self {
+            experiment_id,
+            model_name,
+            mode,
+            encoding_spec,
+            duration_seconds: DEFAULT_DURATION_SECONDS,
+            fixed_fps: SEND_FPS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Detection {
+    pub class: String,
+    pub bbox: [f32; 4],
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ObjectCounts {
+    pub cars: u32,
+    pub trucks: u32,
+    pub buses: u32,
+    pub motorcycles: u32,
+    pub bicycles: u32,
+    pub pedestrians: u32,
+    pub total_vehicles: u32,
+    pub total_objects: u32,
+}
 
 pub mod tiers {
     use super::*;
-    use image::codecs::png;
 
     #[inline]
     pub fn png_level(t: Tier) -> u8 {

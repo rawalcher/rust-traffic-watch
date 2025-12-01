@@ -6,18 +6,16 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{debug, info, warn};
 
-use protocol::constants::{compute_skip, fps_to_interval, MAX_FRAME_SEQUENCE};
-use protocol::time::current_timestamp_micros;
+use super::csv_writer::generate_analysis_csv;
 use network::connection;
 use network::connection::{
     get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role,
 };
+use protocol::config::{compute_skip, fps_to_interval, MAX_FRAME_SEQUENCE};
+use protocol::types::{ExperimentConfig, ExperimentMode};
 use protocol::{
-    ControlMessage, DeviceId, ExperimentConfig, ExperimentMode, InferenceMessage, Message,
-    TimingMetadata,
+    current_timestamp_micros, ControlMessage, DeviceId, InferenceMessage, Message, TimingMetadata,
 };
-
-use super::csv_writer::generate_analysis_csv;
 
 pub struct ControllerHarness {
     active_sink_tx: watch::Sender<Option<mpsc::UnboundedSender<InferenceMessage>>>,

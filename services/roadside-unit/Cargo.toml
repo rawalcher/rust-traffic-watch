@@ -8,7 +8,6 @@ tokio = { workspace = true }
 shared = { path = "../../shared" }
 protocol = { path = "../../crates/protocol"}
 network = { path = "../../crates/network"}
-codec = { path = "../../crates/codec"}
 inference = { path = "../../crates/inference"}
 log = "0.4.27"
 image = "0.25.8"

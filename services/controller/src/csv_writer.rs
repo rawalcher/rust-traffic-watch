@@ -3,7 +3,8 @@ use csv::Writer;
 use std::error::Error;
 use tracing::{debug, info, warn};
 
-use protocol::{ExperimentConfig, ExperimentMode, InferenceMessage};
+use protocol::types::{ExperimentConfig, ExperimentMode};
+use protocol::InferenceMessage;
 
 fn opt_str<T: ToString>(opt: Option<T>) -> String {
     opt.map(|v| v.to_string()).unwrap_or_default()

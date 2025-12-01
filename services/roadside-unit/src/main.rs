@@ -1,24 +1,23 @@
 mod frame_loader;
 mod service;
 
-use codec::types::tiers::{codec_name, res_folder};
-use codec::types::{EncodingSpec, Frame};
 use image::GenericImageView;
 use inference::experiment_manager::ExperimentManager;
 use log::{debug, error, info, warn};
 use network::framing::{read_message, spawn_writer};
-use protocol::constants::{INFERENCE_PYTORCH_PATH, controller_address, jetson_address};
-use protocol::time::current_timestamp_micros;
+use protocol::config::{controller_address, jetson_address, INFERENCE_PYTORCH_PATH};
+use protocol::types::tiers::{codec_name, res_folder};
+use protocol::types::{EncodingSpec, ExperimentConfig, ExperimentMode, Frame};
 use protocol::{
-    ControlMessage, DeviceId, ExperimentConfig, ExperimentMode, FrameMessage, InferenceMessage,
-    Message, TimingMetadata,
+    current_timestamp_micros, ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message,
+    TimingMetadata,
 };
 use shared::perform_python_inference_with_counts;
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedReadHalf;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
@@ -323,7 +322,7 @@ pub fn handle_frame(
     let tier = spec.tier;
 
     // roadside-unit/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}
-    let mut path = PathBuf::from("services/roadside-unit/sample");
+    let mut path = PathBuf::from("services/roadside-unit/testImages");
     path.push(folder_res);
     path.push(folder_codec);
     path.push(format!("seq3-drone_{frame_number:07}_{tier}.{ext}"));

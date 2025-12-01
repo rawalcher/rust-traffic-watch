@@ -1,7 +1,7 @@
 use anyhow::Result;
 use image::{imageops, DynamicImage, GenericImageView, Rgb};
 use ndarray::{s, Array, ArrayView3, Axis};
-use protocol::Detection;
+use protocol::types::Detection;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -54,11 +54,8 @@ pub fn parse_yolo_output(
     // Get first batch and ensure correct orientation
     let predictions = output.index_axis(Axis(0), 0);
     let shape = predictions.shape();
-    let predictions = if shape[0] < shape[1] {
-        predictions.t().to_owned()
-    } else {
-        predictions.to_owned()
-    };
+    let predictions =
+        if shape[0] < shape[1] { predictions.t().to_owned() } else { predictions.to_owned() };
 
     let mut boxes = Vec::new();
     let mut scores = Vec::new();

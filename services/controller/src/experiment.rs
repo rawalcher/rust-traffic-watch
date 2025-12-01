@@ -2,11 +2,12 @@ use std::error::Error;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 
-use codec::types::ImageCodecKind::{JpgLossy, PngLossless, WebpLossless, WebpLossy};
-use codec::types::ImageResolutionType::{Letterbox, FHD, HD};
-use codec::types::{EncodingSpec, ImageCodecKind, ImageResolutionType, Tier};
-use protocol::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, SEND_FPS};
-use protocol::{ExperimentConfig, ExperimentMode};
+use protocol::config::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, SEND_FPS};
+use protocol::types::ImageCodecKind::{JpgLossy, PngLossless, WebpLossless, WebpLossy};
+use protocol::types::ImageResolutionType::{Letterbox, FHD, HD};
+use protocol::types::{
+    EncodingSpec, ExperimentConfig, ExperimentMode, ImageCodecKind, ImageResolutionType, Tier,
+};
 
 use super::service::ControllerHarness;
 

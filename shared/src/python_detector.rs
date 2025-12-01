@@ -1,6 +1,6 @@
-use protocol::time::current_timestamp_micros;
 use log::{debug, error, info, warn};
-use protocol::{Detection, FrameMessage, InferenceResult, ObjectCounts};
+use protocol::types::{Detection, ObjectCounts};
+use protocol::{current_timestamp_micros, FrameMessage, InferenceResult};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -44,10 +44,7 @@ impl PersistentPythonDetector {
 
         debug!("Python process is ready (PID: {})", process.id());
 
-        Ok(Self {
-            process: Some(process),
-            state: DetectorState::Ready,
-        })
+        Ok(Self { process: Some(process), state: DetectorState::Ready })
     }
 
     fn wait_for_ready(process: &mut Child, timeout: Duration) -> Result<bool, String> {
@@ -125,9 +122,7 @@ impl PersistentPythonDetector {
             .write_all(&(image_bytes.len() as u32).to_le_bytes())
             .map_err(|e| format!("Write length failed: {}", e))?;
 
-        stdin
-            .write_all(image_bytes)
-            .map_err(|e| format!("Write image failed: {}", e))?;
+        stdin.write_all(image_bytes).map_err(|e| format!("Write image failed: {}", e))?;
 
         stdin.flush().map_err(|e| format!("Flush failed: {}", e))?;
 
@@ -139,16 +134,12 @@ impl PersistentPythonDetector {
         let stdout = process.stdout.as_mut().ok_or("Missing stdout")?;
 
         let mut length_buf = [0u8; 4];
-        stdout
-            .read_exact(&mut length_buf)
-            .map_err(|e| format!("Read length failed: {}", e))?;
+        stdout.read_exact(&mut length_buf).map_err(|e| format!("Read length failed: {}", e))?;
 
         let length = u32::from_le_bytes(length_buf) as usize;
         let mut buf = vec![0u8; length];
 
-        stdout
-            .read_exact(&mut buf)
-            .map_err(|e| format!("Read data failed: {}", e))?;
+        stdout.read_exact(&mut buf).map_err(|e| format!("Read data failed: {}", e))?;
 
         let text = String::from_utf8(buf).map_err(|e| format!("Invalid UTF-8: {}", e))?;
 
@@ -178,36 +169,18 @@ fn nuclear_kill_inference() {
     info!("Order 66 (only inference_* scripts)");
 
     for sig in ["-TERM", "-KILL"] {
-        let _ = Command::new("pkill")
-            .args([sig, "-f", "inference_pytorch.py"])
-            .status();
-        let _ = Command::new("pkill")
-            .args([sig, "-f", "inference_tensorrt.py"])
-            .status();
+        let _ = Command::new("pkill").args([sig, "-f", "inference_pytorch.py"]).status();
+        let _ = Command::new("pkill").args([sig, "-f", "inference_tensorrt.py"]).status();
         sleep(Duration::from_millis(200));
     }
 
     let mut leftovers: Vec<String> = Vec::new();
 
-    if let Ok(out) = Command::new("pgrep")
-        .args(["-fa", "inference_pytorch.py"])
-        .output()
-    {
-        leftovers.extend(
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(|s| s.to_string()),
-        );
+    if let Ok(out) = Command::new("pgrep").args(["-fa", "inference_pytorch.py"]).output() {
+        leftovers.extend(String::from_utf8_lossy(&out.stdout).lines().map(|s| s.to_string()));
     }
-    if let Ok(out) = Command::new("pgrep")
-        .args(["-fa", "inference_tensorrt.py"])
-        .output()
-    {
-        leftovers.extend(
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(|s| s.to_string()),
-        );
+    if let Ok(out) = Command::new("pgrep").args(["-fa", "inference_tensorrt.py"]).output() {
+        leftovers.extend(String::from_utf8_lossy(&out.stdout).lines().map(|s| s.to_string()));
     }
 
     leftovers.sort();

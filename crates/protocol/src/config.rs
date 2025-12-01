@@ -38,7 +38,6 @@ pub fn compute_skip(send_fps: u64) -> u64 {
     SOURCE_FPS / send_fps
 }
 
-
 pub fn controller_address() -> String {
     format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_PORT)
 }
@@ -54,3 +53,15 @@ pub fn jetson_address() -> String {
 pub fn jetson_bind_address() -> String {
     format!("0.0.0.0:{}", JETSON_PORT)
 }
+
+// PNG: zlib compression levels (1–9, higher = more compression)
+pub const PNG_ZLIB_LEVEL: [u8; 3] = [6, 3, 1];
+
+// JPEG: quality scale (0–100, higher = better quality)
+pub const JPEG_QUALITY: [u8; 3] = [90, 75, 60];
+
+// WebP Lossy: quality scale (0–100)
+pub const WEBP_LOSSY_QUALITY: [f32; 3] = [90.0, 75.0, 60.0];
+
+// WebP Lossless: method 0–6 (compression effort)
+pub const WEBP_LOSSLESS_METHOD: [i32; 3] = [6, 3, 0];
