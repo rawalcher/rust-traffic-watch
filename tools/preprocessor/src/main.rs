@@ -43,7 +43,7 @@ impl ConversionStats {
     }
 
     fn print_summary(&self) {
-        info!("\n=== Conversion Summary ===");
+        info!("=== Conversion Summary ===");
         info!("  Total:     {}", self.total);
         info!("  Succeeded: {}", self.succeeded);
         info!("  Failed:    {}", self.failed);

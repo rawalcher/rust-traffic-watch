@@ -35,13 +35,9 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="last config file refactoring, pinky promise">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="optimized imports, added run configurations for build, clippy and preprocessing frames">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/protocol/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tools/preprocessor/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/tools/preprocessor/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tools/preprocessor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tools/preprocessor/src/main.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -170,7 +166,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764626259020</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="optimized imports, added run configurations for build, clippy and preprocessing frames">
+      <option name="closed" value="true" />
+      <created>1764626796293</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1764626796293</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -191,7 +195,8 @@
     <MESSAGE value="streamlined controller, cleaned up general flow + clippy pedantic" />
     <MESSAGE value="streamlined constants" />
     <MESSAGE value="last config file refactoring, pinky promise" />
-    <option name="LAST_COMMIT_MESSAGE" value="last config file refactoring, pinky promise" />
+    <MESSAGE value="optimized imports, added run configurations for build, clippy and preprocessing frames" />
+    <option name="LAST_COMMIT_MESSAGE" value="optimized imports, added run configurations for build, clippy and preprocessing frames" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
