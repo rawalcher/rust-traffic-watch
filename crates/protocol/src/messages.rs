@@ -1,6 +1,7 @@
-use crate::types::{Frame, ExperimentConfig, Detection};
+use crate::types::{Detection, ExperimentConfig, Frame};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceId {
@@ -11,8 +12,8 @@ pub enum DeviceId {
 impl fmt::Display for DeviceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DeviceId::RoadsideUnit(id) => write!(f, "RSU-{id:04}"),
-            DeviceId::ZoneProcessor(id) => write!(f, "ZP-{id:04}"),
+            Self::RoadsideUnit(id) => write!(f, "RSU-{id:04}"),
+            Self::ZoneProcessor(id) => write!(f, "ZP-{id:04}"),
         }
     }
 }
@@ -74,13 +75,16 @@ pub struct TimingMetadata {
     pub controller_received: Option<u64>,
 }
 
+/// # Panics
+#[must_use]
 pub fn current_timestamp_micros() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_micros() as u64
+    u64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH).expect("Time went backwards").as_micros(),
+    )
+    .expect("Timestamp overflow (not expected until the year 584,554)")
 }
 
+#[must_use]
 pub fn get_hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| {

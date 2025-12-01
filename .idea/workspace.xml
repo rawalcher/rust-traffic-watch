@@ -35,9 +35,11 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="optimized imports, added run configurations for build, clippy and preprocessing frames">
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="removed a lost newline">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tools/preprocessor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tools/preprocessor/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/protocol/src/messages.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/messages.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/protocol/src/types.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/types.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -174,7 +176,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764626796293</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="removed a lost newline">
+      <option name="closed" value="true" />
+      <created>1764627667527</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1764627667527</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -196,7 +206,8 @@
     <MESSAGE value="streamlined constants" />
     <MESSAGE value="last config file refactoring, pinky promise" />
     <MESSAGE value="optimized imports, added run configurations for build, clippy and preprocessing frames" />
-    <option name="LAST_COMMIT_MESSAGE" value="optimized imports, added run configurations for build, clippy and preprocessing frames" />
+    <MESSAGE value="removed a lost newline" />
+    <option name="LAST_COMMIT_MESSAGE" value="removed a lost newline" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

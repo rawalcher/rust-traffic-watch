@@ -16,6 +16,7 @@ pub enum Tier {
 impl Tier {
     pub const ALL: [Self; 3] = [Self::T1, Self::T2, Self::T3];
 
+    #[must_use]
     pub const fn idx(self) -> usize {
         match self {
             Self::T1 => 0,
@@ -72,7 +73,8 @@ pub struct ExperimentConfig {
 }
 
 impl ExperimentConfig {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         experiment_id: String,
         mode: ExperimentMode,
         model_name: String,
@@ -109,39 +111,47 @@ pub struct ObjectCounts {
 }
 
 pub mod tiers {
-    use super::*;
+    use super::{
+        png, ImageCodecKind, ImageResolutionType, Tier, JPEG_QUALITY,
+        PNG_ZLIB_LEVEL, WEBP_LOSSLESS_METHOD, WEBP_LOSSY_QUALITY,
+    };
 
     #[inline]
-    pub fn png_level(t: Tier) -> u8 {
+    #[must_use]
+    pub const fn png_level(t: Tier) -> u8 {
         PNG_ZLIB_LEVEL[t.idx()]
     }
 
     #[inline]
-    pub fn png_compression(t: Tier) -> png::CompressionType {
+    #[must_use]
+    pub const fn png_compression(t: Tier) -> png::CompressionType {
         match png_level(t) {
             1 => png::CompressionType::Fast,
-            3 => png::CompressionType::Default,
             6 => png::CompressionType::Best,
             _ => png::CompressionType::Default,
         }
     }
 
     #[inline]
-    pub fn jpeg_quality(t: Tier) -> u8 {
+    #[must_use]
+    pub const fn jpeg_quality(t: Tier) -> u8 {
         JPEG_QUALITY[t.idx()]
     }
 
     #[inline]
-    pub fn webp_lossy_quality(t: Tier) -> f32 {
+    #[must_use]
+    pub const fn webp_lossy_quality(t: Tier) -> f32 {
         WEBP_LOSSY_QUALITY[t.idx()]
     }
 
     #[inline]
-    pub fn webp_lossless_method(t: Tier) -> i32 {
+    #[must_use]
+    pub const fn webp_lossless_method(t: Tier) -> i32 {
         WEBP_LOSSLESS_METHOD[t.idx()]
     }
 
-    pub fn res_folder(res: ImageResolutionType) -> &'static str {
+    #[must_use]
+    pub const fn res_folder(res: ImageResolutionType) -> &'static str {
         match res {
             ImageResolutionType::FHD => "FHD",
             ImageResolutionType::HD => "HD",
@@ -149,7 +159,8 @@ pub mod tiers {
         }
     }
 
-    pub fn codec_name(codec: ImageCodecKind) -> &'static str {
+    #[must_use]
+    pub const fn codec_name(codec: ImageCodecKind) -> &'static str {
         match codec {
             ImageCodecKind::JpgLossy => "jpg",
             ImageCodecKind::PngLossless => "png",

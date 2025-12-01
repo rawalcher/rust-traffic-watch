@@ -24,12 +24,15 @@ pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
 pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
 /// will be removed
 
+/// # Panics
 #[must_use]
 pub fn fps_to_interval(fps: u64) -> Duration {
     assert!(fps > 0, "FPS must not be zero");
     Duration::from_micros(1_000_000 / fps)
 }
 
+/// # Panics
+#[must_use]
 pub fn compute_skip(send_fps: u64) -> u64 {
     assert!(send_fps > 0, "send_fps must not be zero");
     assert!(SOURCE_FPS >= send_fps, "send_fps must not exceed source_fps");
@@ -38,20 +41,24 @@ pub fn compute_skip(send_fps: u64) -> u64 {
     SOURCE_FPS / send_fps
 }
 
+#[must_use]
 pub fn controller_address() -> String {
-    format!("{}:{}", CONTROLLER_ADDRESS, CONTROLLER_PORT)
+    format!("{CONTROLLER_ADDRESS}:{CONTROLLER_PORT}")
 }
 
+#[must_use]
 pub fn controller_bind_address() -> String {
-    format!("0.0.0.0:{}", CONTROLLER_PORT)
+    format!("0.0.0.0:{CONTROLLER_PORT}")
 }
 
+#[must_use]
 pub fn jetson_address() -> String {
-    format!("{}:{}", JETSON_ADDRESS, JETSON_PORT)
+    format!("{JETSON_ADDRESS}:{JETSON_PORT}")
 }
 
+#[must_use]
 pub fn jetson_bind_address() -> String {
-    format!("0.0.0.0:{}", JETSON_PORT)
+    format!("0.0.0.0:{JETSON_PORT}")
 }
 
 // PNG: zlib compression levels (1–9, higher = more compression)
