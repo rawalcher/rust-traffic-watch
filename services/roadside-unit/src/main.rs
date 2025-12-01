@@ -229,6 +229,12 @@ async fn handle_offload_experiment(
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
+    info!(
+        "Current working directory: {:?}",
+        std::env::current_dir()?
+    );
+
+
     loop {
         info!("Connecting to controller at {}", controller_address());
 
@@ -350,7 +356,7 @@ pub fn handle_frame(
     let tier = spec.tier;
 
     // roadside-unit/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}
-    let mut path = PathBuf::from("roadside-unit/sample");
+    let mut path = PathBuf::from("services/roadside-unit/sample");
     path.push(folder_res);
     path.push(folder_codec);
     path.push(format!("seq3-drone_{frame_number:07}_{tier}.{ext}"));
