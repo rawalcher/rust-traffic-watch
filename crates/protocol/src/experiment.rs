@@ -1,5 +1,5 @@
 use codec::types::EncodingSpec;
-use common::constants::{DEFAULT_DURATION_SECONDS, DEFAULT_SEND_FPS};
+use common::constants::{DEFAULT_DURATION_SECONDS, SEND_FPS};
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 
@@ -10,7 +10,7 @@ pub struct ExperimentConfig {
     pub mode: ExperimentMode,
     pub encoding_spec: EncodingSpec,
     pub duration_seconds: u64,
-    pub fixed_fps: f32,
+    pub fixed_fps: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Display)]
@@ -32,7 +32,7 @@ impl ExperimentConfig {
             mode,
             encoding_spec,
             duration_seconds: DEFAULT_DURATION_SECONDS,
-            fixed_fps: DEFAULT_SEND_FPS,
+            fixed_fps: SEND_FPS,
         }
     }
 }

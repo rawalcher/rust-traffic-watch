@@ -9,3 +9,4 @@ common = { path = "../../crates/common" }
 codec = { path = "../../crates/codec" }
 anyhow = "1.0.100"
 rayon = "1.11.0"
+log = "0.4.28"

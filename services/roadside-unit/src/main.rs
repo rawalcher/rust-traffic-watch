@@ -3,7 +3,7 @@ mod service;
 
 use codec::types::{EncodingSpec, Frame};
 use common::constants::{
-    codec_ext, codec_folder, controller_address, jetson_address, res_folder, INFERENCE_PYTORCH_PATH,
+    codec_name, controller_address, jetson_address, res_folder, INFERENCE_PYTORCH_PATH,
 };
 use common::time::current_timestamp_micros;
 use image::GenericImageView;
@@ -54,47 +54,33 @@ async fn handle_local_experiment(
     ctrl_tx: mpsc::Sender<Message>,
     config: ExperimentConfig,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut manager = ExperimentManager::new(
-        config.model_name.clone(),
-        INFERENCE_PYTORCH_PATH.to_string(),
-    )?;
+    let mut manager =
+        ExperimentManager::new(config.model_name.clone(), INFERENCE_PYTORCH_PATH.to_string())?;
 
-    ctrl_tx
-        .send(Message::Control(ControlMessage::ReadyToStart))
-        .await
-        .ok();
+    ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
     wait_for_experiment_start(ctrl_reader).await?;
     info!("Experiment started. Processing frames locally...");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel();
 
-    manager.start_inference(
-        result_tx,
-        config.clone(),
-        |frame, detector, cfg| async move {
-            let mut det_opt = detector.lock().await;
-            if let Some(ref mut det) = *det_opt {
-                perform_python_inference_with_counts(&frame, det, &cfg.model_name, "local")
-                    .map(|inference| InferenceMessage {
-                        sequence_id: frame.sequence_id,
-                        timing: frame.timing,
-                        inference,
-                    })
-                    .map_err(|e| -> Box<dyn Error + Send + Sync> { e.into() })
-            } else {
-                Err("Detector unavailable".into())
-            }
-        },
-    );
+    manager.start_inference(result_tx, config.clone(), |frame, detector, cfg| async move {
+        let mut det_opt = detector.lock().await;
+        if let Some(ref mut det) = *det_opt {
+            perform_python_inference_with_counts(&frame, det, &cfg.model_name, "local")
+                .map(|inference| InferenceMessage {
+                    sequence_id: frame.sequence_id,
+                    timing: frame.timing,
+                    inference,
+                })
+                .map_err(|e| -> Box<dyn Error + Send + Sync> { e.into() })
+        } else {
+            Err("Detector unavailable".into())
+        }
+    });
 
-    let result = run_local_experiment_loop(
-        ctrl_reader,
-        ctrl_tx.clone(),
-        &mut result_rx,
-        &manager,
-        &config,
-    )
-    .await;
+    let result =
+        run_local_experiment_loop(ctrl_reader, ctrl_tx.clone(), &mut result_rx, &manager, &config)
+            .await;
 
     if let Err(e) = manager.shutdown().await {
         error!("Manager shutdown error: {e}");
@@ -179,9 +165,7 @@ async fn handle_offload_experiment(
                 // TODO: decide on what capacity each message should operate
                 let tx = spawn_writer(jetson_writer, 10);
 
-                tx.send(Message::Hello(DeviceId::RoadsideUnit(0)))
-                    .await
-                    .ok();
+                tx.send(Message::Hello(DeviceId::RoadsideUnit(0))).await.ok();
 
                 break tx;
             }
@@ -194,10 +178,7 @@ async fn handle_offload_experiment(
 
     info!("Jetson connection established");
 
-    ctrl_tx
-        .send(Message::Control(ControlMessage::ReadyToStart))
-        .await
-        .ok();
+    ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
 
     wait_for_experiment_start(ctrl_reader).await?;
     info!("Experiment started. Forwarding frames to Jetson...");
@@ -229,11 +210,7 @@ async fn handle_offload_experiment(
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
-    info!(
-        "Current working directory: {:?}",
-        std::env::current_dir()?
-    );
-
+    info!("Current working directory: {:?}", std::env::current_dir()?);
 
     loop {
         info!("Connecting to controller at {}", controller_address());
@@ -244,10 +221,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 // TODO: decide on what capacity each message should operate
                 let ctrl_tx = spawn_writer(ctrl_writer, 10);
 
-                ctrl_tx
-                    .send(Message::Hello(DeviceId::RoadsideUnit(0)))
-                    .await
-                    .ok();
+                ctrl_tx.send(Message::Hello(DeviceId::RoadsideUnit(0))).await.ok();
 
                 loop {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
@@ -327,18 +301,10 @@ async fn handle_frame_remote(
     let frame_msg = FrameMessage {
         sequence_id: timing.sequence_id,
         timing,
-        frame: Frame {
-            frame_data,
-            width,
-            height,
-            encoding: config.encoding_spec.clone(),
-        },
+        frame: Frame { frame_data, width, height, encoding: config.encoding_spec.clone() },
     };
 
-    jetson_tx
-        .send(Message::Frame(frame_msg))
-        .await
-        .map_err(|_| "Jetson writer channel closed")?;
+    jetson_tx.send(Message::Frame(frame_msg)).await.map_err(|_| "Jetson writer channel closed")?;
 
     Ok(())
 }
@@ -351,8 +317,10 @@ pub fn handle_frame(
     spec: &EncodingSpec,
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error + Send + Sync>> {
     let folder_res = res_folder(spec.resolution);
-    let folder_codec = codec_folder(spec.codec);
-    let ext = codec_ext(spec.codec);
+    let name = codec_name(spec.codec);
+    let folder_codec = name;
+    let ext = name;
+
     let tier = spec.tier;
 
     // roadside-unit/sample/{resolution}/{codec}/seq3-drone_{:07}_{tier}.{ext}

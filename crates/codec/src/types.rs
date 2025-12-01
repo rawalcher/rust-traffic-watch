@@ -24,14 +24,13 @@ pub enum Tier {
     T3,
 }
 impl Tier {
-    pub const ALL: [Tier; 3] = [Tier::T1, Tier::T2, Tier::T3];
-
-    #[inline(always)]
+    pub const ALL: [Self; 3] = [Self::T1, Self::T2, Self::T3];
+    
     pub const fn idx(self) -> usize {
         match self {
-            Tier::T1 => 0,
-            Tier::T2 => 1,
-            Tier::T3 => 2,
+            Self::T1 => 0,
+            Self::T2 => 1,
+            Self::T3 => 2,
         }
     }
 }
