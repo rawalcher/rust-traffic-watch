@@ -1,4 +1,4 @@
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use protocol::types::{Detection, ObjectCounts};
 use protocol::{current_timestamp_micros, FrameMessage, InferenceResult};
 use serde::{Deserialize, Serialize};

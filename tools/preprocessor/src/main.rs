@@ -32,13 +32,13 @@ impl ConversionStats {
 
     fn report_success(&mut self) {
         self.succeeded += 1;
-        if self.succeeded % 50 == 0 || self.succeeded == self.total {
+        if self.succeeded.is_multiple_of(50) || self.succeeded == self.total {
             let percent = (self.succeeded as f32 / self.total as f32) * 100.0;
             info!("Progress: {}/{} ({:.1}%)", self.succeeded, self.total, percent);
         }
     }
 
-    fn report_failure(&mut self) {
+    const fn report_failure(&mut self) {
         self.failed += 1;
     }
 
@@ -67,7 +67,7 @@ fn process_single_task(
     let codec_dir = res_dir.join(codec_name(codec));
     fs::create_dir_all(&codec_dir)?;
 
-    let tier_suffix = format!("{:?}", tier);
+    let tier_suffix = format!("{tier:?}");
     let output_file =
         codec_dir.join(format!("{}_{}.{}", task.frame_number, tier_suffix, codec_name(codec)));
 
@@ -139,7 +139,7 @@ fn main() -> Result<()> {
 
     work_items.par_iter().for_each(|(task, res, codec, tier)| {
         match process_single_task(task, *res, *codec, *tier) {
-            Ok(_) => stats.lock().unwrap().report_success(),
+            Ok(()) => stats.lock().unwrap().report_success(),
             Err(e) => {
                 error!("Task failed: {}", e);
                 stats.lock().unwrap().report_failure();
