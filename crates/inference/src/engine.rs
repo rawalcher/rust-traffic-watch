@@ -25,13 +25,7 @@ pub struct OnnxDetector {
 impl OnnxDetector {
     pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self> {
         let path = model_path.as_ref();
-        let model_name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let _ = ort::init().with_name("YoloInference").commit();
+        let model_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
 
         let session = Session::builder()?
             .with_intra_threads(1)?
@@ -51,12 +45,7 @@ impl OnnxDetector {
 
         let allowed_classes = vec![0, 1, 2, 3, 5, 7];
 
-        Ok(Self {
-            session,
-            model_name,
-            class_names,
-            allowed_classes,
-        })
+        Ok(Self { session, model_name, class_names, allowed_classes })
     }
 
     pub fn detect(&mut self, image_bytes: &[u8]) -> Result<InferenceResult> {

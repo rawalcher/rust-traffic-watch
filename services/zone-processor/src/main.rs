@@ -1,25 +1,29 @@
 mod service;
 
-use inference::experiment_manager::ExperimentManager;
-use log::{debug, error, info, warn};
+use inference::inference_manager::InferenceManager;
+use inference::persistent::perform_onnx_inference_with_counts;
+
 use network::framing::{read_message, read_message_stream, spawn_writer};
-use protocol::config::{controller_address, jetson_bind_address, INFERENCE_TENSORRT_PATH};
+use protocol::config::{controller_address, jetson_bind_address};
 use protocol::types::ExperimentConfig;
 use protocol::{
     current_timestamp_micros, ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message,
 };
-use shared::perform_python_inference_with_counts;
+
 use std::error::Error;
-use std::sync::Arc;
 use std::time::Duration;
+
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::sleep;
-// TODO: handle pi connections more gracefully, for future implementation we want to always listen to new pi connections since
-// if one disconnects we just want to continue when reconnected. the jetson acts as an server that "exposes" the inference
 
-// for now
+use tracing::{debug, error, info, warn};
+
+// TODO: handle Pi reconnects more gracefully (future work)
+// TODO: extract logic from pi and jetson that are same
+// TODO: refactor timestamping to remove jetson and pi references
+
 #[allow(clippy::too_many_lines)]
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -35,11 +39,9 @@ async fn run_experiment_cycle(
         }
     };
 
-    info!("Initializing experiment manager...");
-    let manager = Arc::new(Mutex::new(ExperimentManager::new(
-        config.model_name.clone(),
-        INFERENCE_TENSORRT_PATH.to_string(),
-    )?));
+    info!("Initializing ONNX inference manager...");
+    let mut manager =
+        InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
 
     info!("Waiting for Pi to connect on {}...", jetson_bind_address());
     let listener = TcpListener::bind(jetson_bind_address()).await?;
@@ -52,11 +54,14 @@ async fn run_experiment_cycle(
 
     let hello = read_message_stream(&mut pi_stream).await?;
     match hello {
-        Message::Hello(DeviceId::ZoneProcessor(0)) => info!("Pi hello received"),
+        Message::Hello(DeviceId::RoadsideUnit(_)) => {
+            info!("Pi hello received");
+        }
         other => warn!("Unexpected hello from Pi: {other:?}"),
     }
 
     let (mut pi_reader, _pi_writer) = pi_stream.into_split();
+
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<FrameMessage>();
     let frame_tx_clone = frame_tx.clone();
 
@@ -64,11 +69,10 @@ async fn run_experiment_cycle(
         loop {
             match read_message(&mut pi_reader).await {
                 Ok(Message::Frame(frame)) => {
-                    let seq_id = frame.sequence_id;
-                    info!("Jetson received frame from Pi: sequence_id={seq_id}");
+                    info!("Jetson received frame from Pi: sequence_id={}", frame.sequence_id);
 
                     if frame_tx_clone.send(frame).is_err() {
-                        error!("Failed to forward frame to processing pipeline");
+                        error!("Failed to forward frame to inference pipeline");
                         break;
                     }
                 }
@@ -85,82 +89,60 @@ async fn run_experiment_cycle(
         }
     });
 
-    info!("Experiment manager ready, sending ReadyToStart");
+    info!("Sending ReadyToStart to controller");
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
 
     wait_for_experiment_start(ctrl_reader).await?;
-    info!("Experiment started. Processing frames...");
+    info!("Experiment started (Jetson ONNX inference)");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
-    {
-        let manager_clone = Arc::clone(&manager);
-        let mut locked = manager_clone.lock().await;
-        locked.start_inference(result_tx, config.clone(), |frame, detector, cfg| async move {
-            let mut det_opt = detector.lock().await;
-            if let Some(ref mut det) = *det_opt {
-                let mut frame_mut = frame;
-                frame_mut.timing.jetson_received = Some(current_timestamp_micros());
+    manager.start_inference(result_tx, config.clone(), |mut frame, detector, _cfg| {
+        frame.timing.jetson_received = Some(current_timestamp_micros());
 
-                let inference = perform_python_inference_with_counts(
-                    &frame_mut,
-                    det,
-                    &cfg.model_name,
-                    "offload",
-                )?;
+        let inference = perform_onnx_inference_with_counts(&frame, detector)?;
 
-                frame_mut.timing.jetson_sent_result = Some(current_timestamp_micros());
+        frame.timing.jetson_sent_result = Some(current_timestamp_micros());
 
-                Ok(InferenceMessage {
-                    sequence_id: frame_mut.sequence_id,
-                    timing: frame_mut.timing,
-                    inference,
-                })
-            } else {
-                Err("Detector unavailable".into())
-            }
-        });
-    }
-
-    let manager_clone = Arc::clone(&manager);
-    let frame_forwarder = tokio::spawn(async move {
-        while let Some(frame) = frame_rx.recv().await {
-            let mgr = manager_clone.lock().await;
-            mgr.update_pending_frame(frame).await;
-        }
-        debug!("Frame forwarder task ended");
+        Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
     });
 
     loop {
         tokio::select! {
             Some(result) = result_rx.recv() => {
-                info!("Sending result for sequence_id {} back to controller", result.sequence_id);
+                info!(
+                    "Sending inference result for sequence_id {} to controller",
+                    result.sequence_id
+                );
+
                 if ctrl_tx.send(Message::Result(result)).await.is_err() {
                     error!("Controller writer channel closed");
                     break;
                 }
             }
+
+            Some(frame) = frame_rx.recv() => {
+                manager.update_pending_frame(frame);
+            }
+
             msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Frame(frame) => {
-                        warn!("Unexpected frame on controller channel, forwarding to pipeline");
+                        warn!("Unexpected frame from controller, forwarding to pipeline");
                         let _ = frame_tx.send(frame);
                     }
+
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received from controller, beginning teardown");
+                        info!("Shutdown received from controller, tearing down");
 
                         drop(frame_tx);
                         pi_handler.abort();
-                        let _ = frame_forwarder.await;
 
-                        let mut mgr = manager.lock().await;
-                        if let Err(e) = mgr.shutdown().await {
-                            error!("Manager shutdown error: {e}");
-                        }
-
+                        manager.shutdown().await;
                         break;
                     }
-                    unexpected => warn!("Unexpected controller message: {unexpected:?}"),
+
+                    other => warn!("Unexpected controller message: {other:?}"),
                 }
             }
         }
@@ -180,7 +162,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         match TcpStream::connect(controller_address()).await {
             Ok(controller_stream) => {
                 let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
-                // TODO: decide on what capacity each message should operate
                 let ctrl_tx = spawn_writer(ctrl_writer, 10);
 
                 ctrl_tx.send(Message::Hello(DeviceId::ZoneProcessor(0))).await.ok();

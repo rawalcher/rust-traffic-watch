@@ -5,9 +5,8 @@ edition = "2024"
 
 [dependencies]
 tokio = { workspace = true }
-shared = { path = "../../shared" }
-protocol = { path = "../../crates/protocol"}
-network = { path = "../../crates/network"}
-inference = { path = "../../crates/inference"}
-log = "0.4.27"
+protocol = { path = "../../crates/protocol" }
+network = { path = "../../crates/network" }
+inference = { path = "../../crates/inference" }
 tracing-subscriber = "0.3.20"
+tracing = "0.1.43"
