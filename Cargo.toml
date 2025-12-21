@@ -1,5 +1,5 @@
 [workspace]
-members = ["services/roadside-unit", "services/zone-processor", "services/controller", "shared", "tools/preprocessor", "crates/inference", "crates/network", "crates/protocol", "tools/model-tester"]
+members = ["services/roadside-unit", "services/zone-processor", "services/controller", "tools/preprocessor", "crates/inference", "crates/network", "crates/protocol", "tools/model-tester"]
 resolver = "2"
 
 [workspace.dependencies]

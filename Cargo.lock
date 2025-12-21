@@ -89,6 +89,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atomic-polyfill"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -813,7 +824,6 @@ dependencies = [
  "ndarray",
  "ort",
  "protocol",
- "shared",
  "tokio",
  "tracing",
 ]
@@ -1723,12 +1733,12 @@ dependencies = [
 name = "roadside-unit"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "image 0.25.9",
  "inference",
  "log",
  "network",
  "protocol",
- "shared",
  "tokio",
  "tracing-subscriber",
 ]
@@ -1870,19 +1880,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_json"
-version = "1.0.145"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
-dependencies = [
- "itoa",
- "memchr",
- "ryu",
- "serde",
- "serde_core",
-]
-
-[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1900,16 +1897,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
-]
-
-[[package]]
-name = "shared"
-version = "0.1.0"
-dependencies = [
- "log",
- "protocol",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2677,11 +2664,10 @@ name = "zone-processor"
 version = "0.1.0"
 dependencies = [
  "inference",
- "log",
  "network",
  "protocol",
- "shared",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

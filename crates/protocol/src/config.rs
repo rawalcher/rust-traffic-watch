@@ -18,11 +18,6 @@ pub const MAX_FRAME_SEQUENCE: u64 = 30000;
 pub const FRAME_WIDTH: u32 = 1920;
 pub const FRAME_HEIGHT: u32 = 1080;
 
-/// will be removed
-pub const PYTHON_VENV_PATH: &str = "python3";
-pub const INFERENCE_PYTORCH_PATH: &str = "python/inference_pytorch.py";
-pub const INFERENCE_TENSORRT_PATH: &str = "python/inference_tensorrt.py";
-
 /// # Panics
 #[must_use]
 pub fn fps_to_interval(fps: u64) -> Duration {
