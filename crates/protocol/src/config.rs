@@ -11,6 +11,7 @@ pub const DEFAULT_MODEL: &str = "yolov5n";
 pub const DEFAULT_DURATION_SECONDS: u64 = 10;
 pub const DEFAULT_SEND_FPS: u64 = 1;
 pub const SOURCE_FPS: u64 = 30;
+pub const DEFAULT_RSU_COUNT: u8 = 1;
 
 /// Maximum frame sequence number before wrapping
 pub const MAX_FRAME_SEQUENCE: u64 = 30000;

@@ -1,286 +1,187 @@
+use clap::{Args, Parser, Subcommand};
 use std::error::Error;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 
-use protocol::config::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, DEFAULT_SEND_FPS};
-use protocol::types::ImageCodecKind::{JpgLossy, PngLossless, WebpLossless, WebpLossy};
-use protocol::types::ImageResolutionType::{Letterbox, FHD, HD};
+use protocol::config::{
+    DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, DEFAULT_RSU_COUNT, DEFAULT_SEND_FPS,
+};
 use protocol::types::{
     EncodingSpec, ExperimentConfig, ExperimentMode, ImageCodecKind, ImageResolutionType, Tier,
 };
 
-use super::service::ControllerHarness;
+use crate::service::ControllerHarness;
 
-fn parse_codec(s: &str) -> Option<ImageCodecKind> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "jpg" | "jpglossy" => Some(JpgLossy),
-        "png" | "pnglossless" => Some(PngLossless),
-        "webplossy" => Some(WebpLossy),
-        "webplossless" => Some(WebpLossless),
-        _ => None,
-    }
+#[derive(Parser, Debug, Clone)]
+#[command(author, version, about = "Experiment Controller CLI")]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: RunMode,
+
+    #[arg(long, global = true, conflicts_with = "remote_only")]
+    pub local_only: bool,
+
+    #[arg(long, global = true, conflicts_with = "local_only")]
+    pub remote_only: bool,
 }
 
-fn parse_resolution(s: &str) -> Option<ImageResolutionType> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "fhd" | "1080p" => Some(FHD),
-        "hd" | "720p" => Some(HD),
-        "letterbox" | "lb" => Some(Letterbox),
-        _ => None,
-    }
+#[derive(Subcommand, Debug, Clone)]
+pub enum RunMode {
+    /// Run a single specific model and FPS configuration
+    Single(SingleArgs),
+
+    /// Run a full automated test suite with custom parameters
+    Suite(SuiteArgs),
+
+    /// Predefined fast test
+    Quick,
+
+    /// Advanced high-stress suite: all models, all tiers, long duration
+    Advanced,
 }
 
-fn parse_tier(s: &str) -> Option<Tier> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "t1" => Some(Tier::T1),
-        "t2" => Some(Tier::T2),
-        "t3" => Some(Tier::T3),
-        _ => None,
-    }
+#[derive(Args, Debug, Clone)]
+pub struct SingleArgs {
+    #[arg(long, default_value = DEFAULT_MODEL)]
+    pub model: String,
+
+    #[arg(long, default_value_t = DEFAULT_SEND_FPS)]
+    pub fps: u64,
+
+    #[arg(long, default_value_t = DEFAULT_RSU_COUNT)]
+    pub rsu_count: u8,
+
+    #[arg(long, default_value_t = DEFAULT_DURATION_SECONDS)]
+    pub duration: u64,
 }
 
-#[derive(Debug)]
-pub struct TestConfig {
+#[derive(Args, Debug, Clone)]
+pub struct SuiteArgs {
+    #[arg(long, value_delimiter = ',', default_values = &["yolov5n", "yolov5s", "yolov5m"])]
     pub models: Vec<String>,
+
+    #[arg(long, value_delimiter = ',', default_values = &["1", "5", "10"])]
     pub fps_values: Vec<u64>,
-    pub modes: Vec<ExperimentMode>,
-    pub duration_seconds: u64,
-    pub codecs: Vec<ImageCodecKind>,
-    pub tiers: Vec<Tier>,
-    pub resolutions: Vec<ImageResolutionType>,
-    pub num_roadside_units: u8,
+
+    #[arg(long, default_value_t = DEFAULT_DURATION_SECONDS)]
+    pub duration: u64,
+
+    #[arg(long, default_value_t = 1)]
+    pub rsu_count: u8,
 }
 
-impl Default for TestConfig {
-    fn default() -> Self {
-        Self {
-            models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10],
-            modes: vec![ExperimentMode::Local, ExperimentMode::Offload],
-            duration_seconds: DEFAULT_DURATION_SECONDS,
-            codecs: vec![JpgLossy, WebpLossy, PngLossless, WebpLossless],
-            tiers: vec![Tier::T1, Tier::T2, Tier::T3],
-            resolutions: vec![FHD, HD, Letterbox],
-            num_roadside_units: 1,
-        }
-    }
-}
-
-impl TestConfig {
-    pub fn parse_args(args: &[String]) -> Self {
-        let mut config = Self::default();
-
-        for arg in args {
-            match arg.as_str() {
-                a if a.starts_with("--models=") => {
-                    config.models =
-                        a.trim_start_matches("--models=").split(',').map(String::from).collect();
-                }
-                a if a.starts_with("--fps=") => {
-                    config.fps_values = a
-                        .trim_start_matches("--fps=")
-                        .split(',')
-                        .filter_map(|s| s.parse::<u64>().ok())
-                        .collect();
-                }
-                a if a.starts_with("--duration=") => {
-                    if let Ok(d) = a.trim_start_matches("--duration=").parse::<u64>() {
-                        config.duration_seconds = d;
-                    }
-                }
-                a if a.starts_with("--codecs=") => {
-                    config.codecs = a
-                        .trim_start_matches("--codecs=")
-                        .split(',')
-                        .filter_map(parse_codec)
-                        .collect();
-                }
-                a if a.starts_with("--tiers=") => {
-                    config.tiers = a
-                        .trim_start_matches("--tiers=")
-                        .split(',')
-                        .filter_map(parse_tier)
-                        .collect();
-                }
-                a if a.starts_with("--resolutions=") => {
-                    config.resolutions = a
-                        .trim_start_matches("--resolutions=")
-                        .split(',')
-                        .filter_map(parse_resolution)
-                        .collect();
-                }
-                a if a.starts_with("--num-roadside-units=") => {
-                    if let Ok(n) = a.trim_start_matches("--num-roadside-units=").parse::<u8>() {
-                        config.num_roadside_units = n;
-                    }
-                }
-                "--local-only" => config.modes = vec![ExperimentMode::Local],
-                "--remote-only" => config.modes = vec![ExperimentMode::Offload],
-
-                "--quick" => {
-                    config.duration_seconds = 60;
-                    config.models = vec!["yolov5n".into()];
-                    config.fps_values = vec![1, 10];
-                    config.codecs = vec![JpgLossy];
-                    config.tiers = vec![Tier::T2];
-                    config.resolutions = vec![FHD];
-                    config.num_roadside_units = 1;
-                }
-                _ => {}
-            }
-        }
-
-        config.num_roadside_units = config.num_roadside_units.max(1);
-        config
-    }
-
-    pub fn total_experiments(&self) -> usize {
-        self.models.len()
-            * self.fps_values.len()
-            * self.modes.len()
-            * self.codecs.len()
-            * self.tiers.len()
-            * self.resolutions.len()
-    }
-
-    pub fn estimated_time(&self) -> Duration {
-        Duration::from_secs((self.duration_seconds + 10) * self.total_experiments() as u64)
-    }
-}
-
-pub async fn run_single_experiment(
-    args: &[String],
+pub async fn execute(
+    cli: Cli,
     harness: &ControllerHarness,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let model_name = args.iter().find(|arg| arg.starts_with("--model=")).map_or_else(
-        || DEFAULT_MODEL.to_string(),
-        |arg| arg.trim_start_matches("--model=").to_string(),
-    );
-
-    let fps = args
-        .iter()
-        .find(|arg| arg.starts_with("--fps="))
-        .and_then(|arg| arg.trim_start_matches("--fps=").parse::<u64>().ok())
-        .unwrap_or(DEFAULT_SEND_FPS);
-
-    let num_roadside_units = args
-        .iter()
-        .find(|arg| arg.starts_with("--num-roadside-units="))
-        .and_then(|arg| arg.trim_start_matches("--num-roadside-units=").parse::<u32>().ok())
-        .unwrap_or(1);
-
-    let modes = match args.iter().find(|a| *a == "--local" || *a == "--remote") {
-        Some(flag) if flag == "--local" => vec![ExperimentMode::Local],
-        Some(flag) if flag == "--remote" => vec![ExperimentMode::Offload],
-        _ => vec![ExperimentMode::Local, ExperimentMode::Offload],
+    let modes = if cli.local_only {
+        vec![ExperimentMode::Local]
+    } else if cli.remote_only {
+        vec![ExperimentMode::Offload]
+    } else {
+        vec![ExperimentMode::Local, ExperimentMode::Offload]
     };
 
-    let codec = args
-        .iter()
-        .find(|a| a.starts_with("--codec="))
-        .and_then(|a| parse_codec(a.trim_start_matches("--codec=")))
-        .unwrap_or(JpgLossy);
+    match cli.command {
+        RunMode::Single(args) => run_single_experiment(args, modes, harness).await,
+        RunMode::Suite(args) => run_test_suite(args, modes, harness).await,
+        RunMode::Quick => {
+            let quick_args = SuiteArgs {
+                models: vec!["yolov5n".into()],
+                fps_values: vec![1, 10],
+                duration: 60,
+                rsu_count: 2,
+            };
+            run_test_suite(quick_args, modes, harness).await
+        }
+        RunMode::Advanced => {
+            let advanced_args = SuiteArgs {
+                models: vec![
+                    "yolov5n".into(),
+                    "yolov5s".into(),
+                    "yolov5m".into(),
+                    "yolov5l".into(),
+                ],
+                fps_values: vec![1, 5, 10, 20, 30],
+                duration: 600,
+                rsu_count: 2,
+            };
+            run_test_suite(advanced_args, modes, harness).await
+        }
+    }
+}
 
-    let resolution = args
-        .iter()
-        .find(|a| a.starts_with("--resolution="))
-        .and_then(|a| parse_resolution(a.trim_start_matches("--resolution=")))
-        .unwrap_or(FHD);
-
-    let tier = args
-        .iter()
-        .find(|a| a.starts_with("--tier="))
-        .and_then(|a| parse_tier(a.trim_start_matches("--tier=")))
-        .unwrap_or(Tier::T2);
-
-    let encoding = EncodingSpec { codec, tier, resolution };
+async fn run_single_experiment(
+    args: SingleArgs,
+    modes: Vec<ExperimentMode>,
+    harness: &ControllerHarness,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let encoding = EncodingSpec {
+        codec: ImageCodecKind::JpgLossy,
+        tier: Tier::T2,
+        resolution: ImageResolutionType::FHD,
+    };
 
     for mode in modes {
-        let experiment_id = format!("{mode}_{model_name}_{fps}fps_{codec}_{tier}_{resolution}");
+        let experiment_id = format!("{}_{}_{}fps_single", mode, args.model, args.fps);
 
         let mut config = ExperimentConfig::new(
             experiment_id.clone(),
             mode,
-            1,
-            model_name.clone(),
+            args.rsu_count,
+            args.model.clone(),
             encoding.clone(),
         );
-        config.fixed_fps = fps;
+        config.fixed_fps = args.fps;
+        config.duration_seconds = args.duration;
 
-        info!("Starting single experiment: {} (RSUs={})", experiment_id, num_roadside_units);
+        info!("Starting single experiment: {}", experiment_id);
         harness.run_controller(config).await?;
         sleep(Duration::from_secs(2)).await;
     }
     Ok(())
 }
 
-pub async fn run_test_suite(
-    test_config: TestConfig,
+async fn run_test_suite(
+    args: SuiteArgs,
+    modes: Vec<ExperimentMode>,
     harness: &ControllerHarness,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("=================================================");
-    info!("Starting automated test suite");
-    info!("Models: {:?}", test_config.models);
-    info!("FPS values: {:?}", test_config.fps_values);
-    info!("Modes: {:?}", test_config.modes);
-    info!("Codecs: {:?}", test_config.codecs);
-    info!("Tiers: {:?}", test_config.tiers);
-    info!("Resolutions: {:?}", test_config.resolutions);
-    info!("Number of RSUs (N): {}", test_config.num_roadside_units);
-    info!("Duration per test: {} seconds", test_config.duration_seconds);
-    info!("Total experiments: {}", test_config.total_experiments());
-    info!("Estimated total time: {:?}", test_config.estimated_time());
-    info!("=================================================");
-
+    let total = args.models.len() * args.fps_values.len() * modes.len();
     let mut current = 0;
-    let total = test_config.total_experiments();
-    let num_roadside_units = test_config.num_roadside_units;
 
-    for model in &test_config.models {
-        for fps in &test_config.fps_values {
-            for mode in &test_config.modes {
-                for codec in &test_config.codecs {
-                    for tier in &test_config.tiers {
-                        for resolution in &test_config.resolutions {
-                            current += 1;
+    info!("Starting suite: {} total experiments", total);
 
-                            let experiment_id =
-                                format!("{mode}_{model}_{fps}fps_{codec}_{tier}_{resolution}",);
+    for model in &args.models {
+        for fps in &args.fps_values {
+            for mode in &modes {
+                current += 1;
+                let experiment_id = format!("{}_{}_{}fps_suite", mode, model, fps);
 
-                            info!("Experiment {}/{}: {}", current, total, experiment_id);
+                info!("[{}/{}] Running: {}", current, total, experiment_id);
 
-                            let mut config = ExperimentConfig::new(
-                                experiment_id.clone(),
-                                mode.clone(),
-                                num_roadside_units.clone(),
-                                model.clone(),
-                                EncodingSpec {
-                                    codec: *codec,
-                                    tier: *tier,
-                                    resolution: *resolution,
-                                },
-                            );
-                            config.fixed_fps = *fps;
-                            config.duration_seconds = test_config.duration_seconds;
+                let config = ExperimentConfig::new(
+                    experiment_id.clone(),
+                    mode.clone(),
+                    args.rsu_count,
+                    model.clone(),
+                    EncodingSpec {
+                        codec: ImageCodecKind::JpgLossy,
+                        tier: Tier::T2,
+                        resolution: ImageResolutionType::FHD,
+                    },
+                );
 
-                            match harness.run_controller_with_retry(config, 3).await {
-                                Ok(()) => info!("Experiment {} complete", experiment_id),
-                                Err(e) => error!("Experiment {} failed: {}", experiment_id, e),
-                            }
+                match harness.run_controller_with_retry(config, 3).await {
+                    Ok(()) => info!("Done: {}", experiment_id),
+                    Err(e) => error!("Failed {}: {}", experiment_id, e),
+                }
 
-                            if current < total {
-                                info!("Waiting 10 seconds before next experiment...");
-                                sleep(Duration::from_secs(10)).await;
-                            }
-                        }
-                    }
+                if current < total {
+                    sleep(Duration::from_secs(5)).await;
                 }
             }
         }
     }
-
-    info!("=================================================");
-    info!("Test suite complete");
-    info!("=================================================");
     Ok(())
 }
