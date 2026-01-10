@@ -14,12 +14,11 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use network::connection::{wait_for_config, wait_for_start};
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
-
-use network::connection::{wait_for_config, wait_for_start};
 use tracing::{debug, error, info, warn};
 
 #[derive(Parser, Debug)]
@@ -145,7 +144,11 @@ async fn run_experiment_cycle(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
+            |_| "zone_processor=info,inference=info,network=info,protocol=info,ort=warn".into(),
+        ))
+        .init();
 
     let args = Args::parse();
     let device_id = DeviceId::ZoneProcessor(args.id);

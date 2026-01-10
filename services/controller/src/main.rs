@@ -9,7 +9,12 @@ use std::error::Error;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "controller=info,network=info,protocol=info,ort=warn".into()),
+        )
+        .init();
 
     let cli = Cli::parse();
     let harness = ControllerHarness::new();

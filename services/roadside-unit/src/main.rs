@@ -22,7 +22,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
+            |_| "roadside_unit=info,inference=info,network=info,protocol=info,ort=warn".into(),
+        ))
+        .init();
 
     let args = Args::parse();
     let device_id = DeviceId::RoadsideUnit(args.id);
@@ -40,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 ctrl_tx.send(Message::Hello(device_id)).await.ok();
 
                 loop {
-                    match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
+                    match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone(), device_id).await {
                         Ok(true) => info!("Ready for next experiment"),
                         Ok(false) => break,
                         Err(e) => {

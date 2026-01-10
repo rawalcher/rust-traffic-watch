@@ -14,13 +14,14 @@ use network::framing::{read_message, spawn_writer};
 use protocol::config::zone_processor_address;
 use protocol::types::{ExperimentConfig, ExperimentMode, Frame};
 use protocol::{
-    current_timestamp_micros, get_hostname, ControlMessage, DeviceId, FrameMessage, InferenceMessage,
-    Message, TimingMetadata,
+    current_timestamp_micros, ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message,
+    TimingMetadata,
 };
 
 pub async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
     ctrl_tx: mpsc::Sender<Message>,
+    device_id: DeviceId,
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let Some(config) = wait_for_config(ctrl_reader).await? else {
         return Ok(false);
@@ -28,10 +29,10 @@ pub async fn run_experiment_cycle(
 
     match config.mode {
         ExperimentMode::Local => {
-            handle_local_experiment(ctrl_reader, ctrl_tx, config).await?;
+            handle_local_experiment(ctrl_reader, ctrl_tx, config, device_id).await?;
         }
         ExperimentMode::Offload => {
-            handle_offload_experiment(ctrl_reader, ctrl_tx, config).await?;
+            handle_offload_experiment(ctrl_reader, ctrl_tx, config, device_id).await?;
         }
     }
 
@@ -42,6 +43,7 @@ async fn handle_local_experiment(
     ctrl_reader: &mut OwnedReadHalf,
     ctrl_tx: mpsc::Sender<Message>,
     config: ExperimentConfig,
+    device_id: DeviceId,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut manager =
         InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
@@ -52,7 +54,7 @@ async fn handle_local_experiment(
     info!("Experiment started (local mode)");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel();
-    let source_device = get_hostname();
+    let source_device = device_id.to_string();
 
     manager.start_inference(result_tx, config.clone(), move |mut frame, detector, _cfg| {
         let inference = perform_onnx_inference_with_counts(&mut frame, detector)?;
@@ -136,6 +138,7 @@ async fn handle_offload_experiment(
     ctrl_reader: &mut OwnedReadHalf,
     ctrl_tx: mpsc::Sender<Message>,
     config: ExperimentConfig,
+    device_id: DeviceId,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Connecting to Zone Processor at {}", zone_processor_address());
 
@@ -159,7 +162,7 @@ async fn handle_offload_experiment(
 
     info!("Experiment started (remote mode)");
 
-    let source_device = get_hostname();
+    let source_device = device_id.to_string();
 
     loop {
         match read_message(ctrl_reader).await? {
