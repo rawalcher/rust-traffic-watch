@@ -10,20 +10,17 @@ use protocol::{
 };
 
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 
 use network::connection::{wait_for_config, wait_for_start};
 use tracing::{debug, error, info, warn};
 
-// TODO: handle Pi reconnects more gracefully (future work)
-// TODO: extract logic from pi and jetson that are same
-
-#[allow(clippy::too_many_lines)]
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
     ctrl_tx: mpsc::Sender<Message>,
@@ -31,6 +28,8 @@ async fn run_experiment_cycle(
     let Some(config) = wait_for_config(ctrl_reader).await? else {
         return Ok(false);
     };
+
+    let num_roadside_units = config.num_roadside_units;
 
     info!(
         "Received experiment config: mode={:?}, model={}, codec={:?}, tier={:?}",
@@ -41,130 +40,98 @@ async fn run_experiment_cycle(
     let mut manager =
         InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
 
-    info!("Waiting for RSU to connect on {}...", zone_processor_bind_address());
+    info!(
+        "Waiting for {num_roadside_units} RSUs to connect on {}...",
+        zone_processor_bind_address()
+    );
     let listener = TcpListener::bind(zone_processor_bind_address()).await?;
 
-    let (mut rsu_stream, rsu_addr) = listener.accept().await?;
-    info!("RSU connected from {rsu_addr}");
+    let mut rsu_mailboxes: Vec<Arc<Mutex<Option<FrameMessage>>>> =
+        Vec::with_capacity(num_roadside_units as usize);
 
-    drop(listener);
-    info!("Listener dropped, port freed for next experiment");
+    while rsu_mailboxes.len() < num_roadside_units as usize {
+        let (mut rsu_stream, rsu_addr) = listener.accept().await?;
+        info!("RSU connected ({}/{}): {rsu_addr}", rsu_mailboxes.len() + 1, num_roadside_units);
 
-    let hello = read_message_stream(&mut rsu_stream).await?;
-    match hello {
-        Message::Hello(DeviceId::RoadsideUnit(id)) => {
-            info!("RSU-{id:04} hello received");
+        let hello = read_message_stream(&mut rsu_stream).await?;
+        if let Message::Hello(DeviceId::RoadsideUnit(id)) = hello {
+            info!("RSU-{id:04} handshake successful");
+        } else {
+            warn!("Unexpected handshake from {rsu_addr}: {hello:?}");
         }
-        other => {
-            warn!("Unexpected hello from RSU: {other:?}");
-        }
-    }
 
-    let (mut rsu_reader, _rsu_writer) = rsu_stream.into_split();
+        let mailbox = Arc::new(Mutex::new(Option::<FrameMessage>::None));
+        rsu_mailboxes.push(mailbox.clone());
 
-    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<FrameMessage>();
-    let frame_tx_clone = frame_tx.clone();
-
-    let rsu_handler = tokio::spawn(async move {
-        loop {
-            match read_message(&mut rsu_reader).await {
-                Ok(Message::Frame(frame)) => {
-                    info!("ZP received frame from RSU: sequence_id={}", frame.sequence_id);
-
-                    if frame_tx_clone.send(frame).is_err() {
-                        error!("Failed to forward frame to inference pipeline");
-                        break;
+        tokio::spawn(async move {
+            let (mut reader, _writer) = rsu_stream.into_split();
+            loop {
+                match read_message(&mut reader).await {
+                    Ok(Message::Frame(frame)) => {
+                        *mailbox.lock().await = Some(frame);
                     }
-                }
-                Ok(Message::Control(ControlMessage::Shutdown)) => {
-                    info!("RSU sent shutdown signal");
-                    break;
-                }
-                Ok(other) => debug!("RSU sent: {other:?}"),
-                Err(e) => {
-                    info!("RSU disconnected: {e:?}");
-                    break;
+                    Ok(Message::Control(ControlMessage::Shutdown)) => break,
+                    Err(_) => break,
+                    _ => {}
                 }
             }
-        }
-        info!("RSU handler task finished");
-    });
+            info!("RSU handler for {rsu_addr} terminated");
+        });
+    }
 
-    info!("Sending ReadyToStart to controller");
+    drop(listener);
+    info!("All RSUs connected. Notifying controller.");
+
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
-
     wait_for_start(ctrl_reader).await?;
-    info!("Experiment started - ZP is now processing frames");
+    info!("Experiment started - Processing frames via Round-Robin");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
     manager.start_inference(result_tx, config.clone(), move |mut frame, detector, _cfg| {
         frame.timing.receive_start = Some(current_timestamp_micros());
-
-        frame.timing.inference_start = Some(current_timestamp_micros());
-        let inference = perform_onnx_inference_with_counts(&frame, detector)?;
-        frame.timing.inference_complete = Some(current_timestamp_micros());
-
+        let inference = perform_onnx_inference_with_counts(&mut frame, detector)?;
         frame.timing.send_result = Some(current_timestamp_micros());
-
-        if let (Some(recv), Some(inf_start), Some(inf_end), Some(send)) = (
-            frame.timing.receive_start,
-            frame.timing.inference_start,
-            frame.timing.inference_complete,
-            frame.timing.send_result,
-        ) {
-            let prep_time = inf_start.saturating_sub(recv);
-            let inference_time = inf_end.saturating_sub(inf_start);
-            let send_prep = send.saturating_sub(inf_end);
-
-            debug!(
-                "ZP timing breakdown for seq={}: prep={}us, inference={}us, send_prep={}us",
-                frame.sequence_id, prep_time, inference_time, send_prep
-            );
-        }
 
         Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
     });
 
+    let mut current_rsu_idx = 0;
+    let mut interval = tokio::time::interval(Duration::from_micros(100));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             Some(result) = result_rx.recv() => {
-                info!(
-                    "Sending inference result for seq={} to controller (detections={})",
-                    result.sequence_id,
-                    result.inference.detection_count
-                );
-
                 if ctrl_tx.send(Message::Result(result)).await.is_err() {
-                    error!("Controller writer channel closed");
                     break;
                 }
-            }
-
-            Some(frame) = frame_rx.recv() => {
-                debug!("Forwarding frame seq={} to inference pipeline", frame.sequence_id);
-                manager.update_pending_frame(frame);
             }
 
             msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown signal received from controller");
-
-                        drop(frame_tx);
-                        rsu_handler.abort();
                         manager.shutdown().await;
-
                         break;
                     }
-
-                    other => warn!("Unexpected controller message during experiment: {other:?}"),
+                    _ => {}
                 }
+            }
+
+            _ = interval.tick() => {
+                let mailbox = &rsu_mailboxes[current_rsu_idx];
+
+                if let Some(frame) = mailbox.lock().await.take() {
+                    debug!("Dispatching frame from RSU slot {} to inference", current_rsu_idx);
+                    manager.update_pending_frame(frame);
+                }
+
+                current_rsu_idx = (current_rsu_idx + 1) % num_roadside_units as usize;
             }
         }
     }
 
-    info!("Experiment cycle complete - ready for next experiment");
+    info!("Experiment cycle complete");
     Ok(true)
 }
 
@@ -189,22 +156,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             info!("Experiment complete - ready for next one");
                             sleep(Duration::from_secs(2)).await;
                         }
-                        Ok(false) => {
-                            info!("Clean shutdown received - exiting experiment loop");
-                            break;
-                        }
+                        Ok(false) => break,
                         Err(e) => {
-                            error!("Experiment cycle error: {e}");
+                            error!("Experiment error: {e}");
                             break;
                         }
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to connect to controller: {e}. Retrying in 10 seconds...");
+                error!("Failed to connect to controller: {e}. Retrying...");
             }
         }
-
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(2)).await;
     }
 }

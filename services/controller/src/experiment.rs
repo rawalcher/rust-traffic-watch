@@ -48,7 +48,7 @@ pub struct TestConfig {
     pub codecs: Vec<ImageCodecKind>,
     pub tiers: Vec<Tier>,
     pub resolutions: Vec<ImageResolutionType>,
-    pub num_roadside_units: u32,
+    pub num_roadside_units: u8,
 }
 
 impl Default for TestConfig {
@@ -110,7 +110,7 @@ impl TestConfig {
                         .collect();
                 }
                 a if a.starts_with("--num-roadside-units=") => {
-                    if let Ok(n) = a.trim_start_matches("--num-roadside-units=").parse::<u32>() {
+                    if let Ok(n) = a.trim_start_matches("--num-roadside-units=").parse::<u8>() {
                         config.num_roadside_units = n;
                     }
                 }
@@ -131,7 +131,6 @@ impl TestConfig {
         }
 
         config.num_roadside_units = config.num_roadside_units.max(1);
-
         config
     }
 
@@ -152,7 +151,6 @@ impl TestConfig {
 pub async fn run_single_experiment(
     args: &[String],
     harness: &ControllerHarness,
-    num_roadside_units: u32,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let model_name = args.iter().find(|arg| arg.starts_with("--model=")).map_or_else(
         || DEFAULT_MODEL.to_string(),
@@ -165,11 +163,18 @@ pub async fn run_single_experiment(
         .and_then(|arg| arg.trim_start_matches("--fps=").parse::<u64>().ok())
         .unwrap_or(DEFAULT_SEND_FPS);
 
+    let num_roadside_units = args
+        .iter()
+        .find(|arg| arg.starts_with("--num-roadside-units="))
+        .and_then(|arg| arg.trim_start_matches("--num-roadside-units=").parse::<u32>().ok())
+        .unwrap_or(1);
+
     let modes = match args.iter().find(|a| *a == "--local" || *a == "--remote") {
         Some(flag) if flag == "--local" => vec![ExperimentMode::Local],
         Some(flag) if flag == "--remote" => vec![ExperimentMode::Offload],
         _ => vec![ExperimentMode::Local, ExperimentMode::Offload],
     };
+
     let codec = args
         .iter()
         .find(|a| a.starts_with("--codec="))
@@ -196,13 +201,14 @@ pub async fn run_single_experiment(
         let mut config = ExperimentConfig::new(
             experiment_id.clone(),
             mode,
+            1,
             model_name.clone(),
             encoding.clone(),
         );
         config.fixed_fps = fps;
 
-        info!("Starting single experiment: {}", experiment_id);
-        harness.run_controller(config, num_roadside_units).await?;
+        info!("Starting single experiment: {} (RSUs={})", experiment_id, num_roadside_units);
+        harness.run_controller(config).await?;
         sleep(Duration::from_secs(2)).await;
     }
     Ok(())
@@ -246,6 +252,7 @@ pub async fn run_test_suite(
                             let mut config = ExperimentConfig::new(
                                 experiment_id.clone(),
                                 mode.clone(),
+                                num_roadside_units.clone(),
                                 model.clone(),
                                 EncodingSpec {
                                     codec: *codec,
@@ -256,10 +263,7 @@ pub async fn run_test_suite(
                             config.fixed_fps = *fps;
                             config.duration_seconds = test_config.duration_seconds;
 
-                            match harness
-                                .run_controller_with_retry(config, num_roadside_units, 3)
-                                .await
-                            {
+                            match harness.run_controller_with_retry(config, 3).await {
                                 Ok(()) => info!("Experiment {} complete", experiment_id),
                                 Err(e) => error!("Experiment {} failed: {}", experiment_id, e),
                             }

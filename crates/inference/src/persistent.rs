@@ -5,7 +5,7 @@ use std::time::Instant;
 use tracing::info;
 
 use crate::engine::OnnxDetector;
-use protocol::{FrameMessage, InferenceResult};
+use protocol::{current_timestamp_micros, FrameMessage, InferenceResult};
 
 pub struct PersistentOnnxDetector {
     detector: Arc<Mutex<OnnxDetector>>,
@@ -112,13 +112,14 @@ pub struct DetectorStats {
 }
 
 pub fn perform_onnx_inference_with_counts(
-    frame_message: &FrameMessage,
+    frame_message: &mut FrameMessage,
     detector: &PersistentOnnxDetector,
 ) -> Result<InferenceResult> {
     let image_bytes = &frame_message.frame.frame_data;
-    let mut result = detector
-        .detect_objects(image_bytes, "default")
-        .context("ONNX inference failed")?;
+    frame_message.timing.inference_start = Some(current_timestamp_micros());
+    let mut result =
+        detector.detect_objects(image_bytes, "default").context("ONNX inference failed")?;
+    frame_message.timing.inference_complete = Some(current_timestamp_micros());
     result.sequence_id = frame_message.sequence_id;
     Ok(result)
 }

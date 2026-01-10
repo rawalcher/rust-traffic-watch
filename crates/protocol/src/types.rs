@@ -67,6 +67,7 @@ pub struct ExperimentConfig {
     pub experiment_id: String,
     pub model_name: String,
     pub mode: ExperimentMode,
+    pub num_roadside_units: u8,
     pub encoding_spec: EncodingSpec,
     pub duration_seconds: u64,
     pub fixed_fps: u64,
@@ -77,6 +78,7 @@ impl ExperimentConfig {
     pub const fn new(
         experiment_id: String,
         mode: ExperimentMode,
+        num_roadside_units: u8,
         model_name: String,
         encoding_spec: EncodingSpec,
     ) -> Self {
@@ -84,6 +86,7 @@ impl ExperimentConfig {
             experiment_id,
             model_name,
             mode,
+            num_roadside_units,
             encoding_spec,
             duration_seconds: DEFAULT_DURATION_SECONDS,
             fixed_fps: DEFAULT_SEND_FPS,

@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeviceId {
-    RoadsideUnit(u32),
-    ZoneProcessor(u32),
+    RoadsideUnit(u8),
+    ZoneProcessor(u8),
 }
 
 impl fmt::Display for DeviceId {

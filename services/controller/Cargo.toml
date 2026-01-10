@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 tokio = { workspace = true }
-protocol = { path = "../../crates/protocol"}
-network = { path = "../../crates/network"}
+protocol = { path = "../../crates/protocol" }
+network = { path = "../../crates/network" }
 chrono = "0.4.41"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"

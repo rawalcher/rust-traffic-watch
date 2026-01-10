@@ -17,10 +17,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let harness = ControllerHarness::new();
 
     let test_config = TestConfig::parse_args(&args);
-    let num_roadside_units = test_config.num_roadside_units;
 
     if args.iter().any(|a| a.starts_with("--model=")) {
-        run_single_experiment(&args, &harness, num_roadside_units).await
+        run_single_experiment(&args, &harness).await
     } else {
         run_test_suite(test_config, &harness).await
     }

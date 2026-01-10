@@ -53,7 +53,6 @@ impl ControllerHarness {
     pub async fn run_controller_with_retry(
         &self,
         config: ExperimentConfig,
-        num_roadside_units: u32,
         max_retries: u32,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut attempt = 0;
@@ -61,7 +60,7 @@ impl ControllerHarness {
         loop {
             attempt += 1;
 
-            return match self.run_controller(config.clone(), num_roadside_units).await {
+            return match self.run_controller(config.clone()).await {
                 Ok(()) => Ok(()),
                 Err(e) if attempt <= max_retries => {
                     if e.to_string().contains("disconnected")
@@ -89,7 +88,6 @@ impl ControllerHarness {
     pub async fn run_controller(
         &self,
         config: ExperimentConfig,
-        num_roadside_units: u32,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Starting experiment: {}", config.experiment_id);
         info!(
@@ -97,7 +95,7 @@ impl ControllerHarness {
             config.mode, config.model_name, config.fixed_fps, config.duration_seconds
         );
 
-        if num_roadside_units == 0 {
+        if config.num_roadside_units == 0 {
             return Err("Cannot run experiment with 0 Roadside Units.".into());
         }
 
@@ -140,7 +138,7 @@ impl ControllerHarness {
         });
 
         let rsu_devices: Vec<DeviceId> =
-            (0..num_roadside_units).map(|i| DeviceId::RoadsideUnit(i)).collect();
+            (0..config.num_roadside_units).map(|i| DeviceId::RoadsideUnit(i)).collect();
 
         let required_devices = match config.mode {
             ExperimentMode::Local => rsu_devices,
@@ -192,7 +190,7 @@ impl ControllerHarness {
             let pulse_msg = Message::Pulse(timing);
 
             let mut pulse_sent = false;
-            for i in 0..num_roadside_units {
+            for i in 0..config.num_roadside_units {
                 let rsu_id = DeviceId::RoadsideUnit(i);
                 if let Some(sender) = get_device_sender(&rsu_id).await {
                     sender.send(pulse_msg.clone())?;
@@ -206,7 +204,8 @@ impl ControllerHarness {
             if pulse_sent {
                 sequence_id += 1;
                 frame_number = Self::advance_frame(frame_number, frame_skip, MAX_FRAME_SEQUENCE);
-                expected_results = expected_results.saturating_add(num_roadside_units as u64);
+                expected_results =
+                    expected_results.saturating_add(config.num_roadside_units as u64);
             }
 
             sleep(pulse_interval).await;
@@ -215,7 +214,7 @@ impl ControllerHarness {
         info!(
             "Finished sending {} pulses ({} pulses/RSU). Waiting 5 seconds for results...",
             expected_results,
-            expected_results / (num_roadside_units as u64)
+            expected_results / (config.num_roadside_units as u64)
         );
         sleep(Duration::from_secs(5)).await;
 

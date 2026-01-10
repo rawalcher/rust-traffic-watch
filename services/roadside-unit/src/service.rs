@@ -55,11 +55,7 @@ async fn handle_local_experiment(
     let source_device = get_hostname();
 
     manager.start_inference(result_tx, config.clone(), move |mut frame, detector, _cfg| {
-        frame.timing.inference_start = Some(current_timestamp_micros());
-
-        let inference = perform_onnx_inference_with_counts(&frame, detector)?;
-
-        frame.timing.inference_complete = Some(current_timestamp_micros());
+        let inference = perform_onnx_inference_with_counts(&mut frame, detector)?;
         frame.timing.send_start = Some(current_timestamp_micros());
 
         Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
