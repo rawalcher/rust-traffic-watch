@@ -92,6 +92,10 @@ impl ControllerHarness {
         num_roadside_units: u32,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Starting experiment: {}", config.experiment_id);
+        info!(
+            "Mode: {:?}, Model: {}, FPS: {}, Duration: {}s",
+            config.mode, config.model_name, config.fixed_fps, config.duration_seconds
+        );
 
         if num_roadside_units == 0 {
             return Err("Cannot run experiment with 0 Roadside Units.".into());
@@ -118,18 +122,22 @@ impl ControllerHarness {
                             Some(mut result) => {
                                 result.timing.controller_received = Some(current_timestamp_micros());
                                 count += 1;
-                                info!("Controller received result {} for sequence_id: {}", count, result.sequence_id);
+                                info!(
+                                    "Controller received result {} for seq={} (mode={}, detections={})",
+                                    count,
+                                    result.sequence_id,
+                                    result.timing.mode_str(),
+                                    result.inference.detection_count
+                                );
                                 results_clone.lock().await.push(result);
                             }
-                            None => break, // sender dropped
+                            None => break,
                         }
                     }
                 }
             }
             debug!("Result collection task finished with {} results", count);
         });
-
-        let controller_listener_task_note = "listener runs globally; not per-run";
 
         let rsu_devices: Vec<DeviceId> =
             (0..num_roadside_units).map(|i| DeviceId::RoadsideUnit(i)).collect();
@@ -174,10 +182,13 @@ impl ControllerHarness {
         while start.elapsed().as_secs() < config.duration_seconds {
             let timing = TimingMetadata {
                 sequence_id,
-                controller_sent_pulse: Some(current_timestamp_micros()),
                 frame_number,
+                source_device: String::new(),
+                mode: Some(config.mode.clone()),
+                controller_sent_pulse: Some(current_timestamp_micros()),
                 ..Default::default()
             };
+
             let pulse_msg = Message::Pulse(timing);
 
             let mut pulse_sent = false;
@@ -185,7 +196,7 @@ impl ControllerHarness {
                 let rsu_id = DeviceId::RoadsideUnit(i);
                 if let Some(sender) = get_device_sender(&rsu_id).await {
                     sender.send(pulse_msg.clone())?;
-                    info!("Sent pulse {} to {}", sequence_id, rsu_id);
+                    debug!("Sent pulse {} to {} (mode={:?})", sequence_id, rsu_id, config.mode);
                     pulse_sent = true;
                 } else {
                     warn!("Could not get sender for {}. Skipping pulse.", rsu_id);
@@ -224,9 +235,7 @@ impl ControllerHarness {
         }
 
         let _ = stop_tx.send(true);
-
         let _ = self.active_sink_tx.send(None);
-
         drop(inference_tx);
 
         match timeout(Duration::from_secs(2), result_collection_task).await {
@@ -240,7 +249,7 @@ impl ControllerHarness {
             }
         }
 
-        info!("Shutdown complete ({})", controller_listener_task_note);
+        info!("Shutdown complete");
 
         let locked_results = results.lock().await;
         let final_count = locked_results.len();

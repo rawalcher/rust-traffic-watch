@@ -1,4 +1,4 @@
-use crate::types::{Detection, ExperimentConfig, Frame};
+use crate::types::{Detection, ExperimentConfig, ExperimentMode, Frame};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -66,13 +66,96 @@ pub struct InferenceResult {
 pub struct TimingMetadata {
     pub sequence_id: u64,
     pub frame_number: u64,
-    pub pi_hostname: String,
-    pub pi_capture_start: Option<u64>,
-    pub pi_sent_to_jetson: Option<u64>,
-    pub jetson_received: Option<u64>,
-    pub jetson_sent_result: Option<u64>,
+    pub source_device: String,
+    pub mode: Option<ExperimentMode>,
+
+    // Controller timestamps
     pub controller_sent_pulse: Option<u64>,
     pub controller_received: Option<u64>,
+
+    // Roadside Unit (RSU) timestamps - always populated
+    pub capture_start: Option<u64>,
+    pub encode_complete: Option<u64>,
+    pub send_start: Option<u64>,
+
+    // Zone Processor (ZP) timestamps - only for remote mode
+    pub receive_start: Option<u64>,
+    pub inference_start: Option<u64>,
+    pub inference_complete: Option<u64>,
+    pub send_result: Option<u64>,
+}
+
+impl TimingMetadata {
+    #[must_use]
+    pub fn new_with_mode(sequence_id: u64, frame_number: u64, mode: ExperimentMode) -> Self {
+        Self { sequence_id, frame_number, mode: Some(mode), ..Default::default() }
+    }
+
+    #[must_use]
+    pub fn is_local_mode(&self) -> bool {
+        matches!(self.mode, Some(ExperimentMode::Local))
+    }
+
+    #[must_use]
+    pub fn is_remote_mode(&self) -> bool {
+        matches!(self.mode, Some(ExperimentMode::Offload))
+    }
+
+    #[must_use]
+    pub fn total_latency(&self) -> Option<u64> {
+        match (self.controller_sent_pulse, self.controller_received) {
+            (Some(start), Some(end)) => Some(end.saturating_sub(start)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn rsu_overhead(&self) -> Option<u64> {
+        match (self.capture_start, self.send_start) {
+            (Some(start), Some(end)) => Some(end.saturating_sub(start)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn network_latency(&self) -> Option<u64> {
+        if self.is_local_mode() {
+            return None;
+        }
+
+        match (self.send_start, self.receive_start) {
+            (Some(send), Some(recv)) => Some(recv.saturating_sub(send)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn zp_overhead(&self) -> Option<u64> {
+        if self.is_local_mode() {
+            return None;
+        }
+
+        match (self.receive_start, self.send_result) {
+            (Some(recv), Some(send)) => Some(send.saturating_sub(recv)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn inference_time(&self) -> Option<u64> {
+        match (self.inference_start, self.inference_complete) {
+            (Some(start), Some(end)) => Some(end.saturating_sub(start)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn mode_str(&self) -> String {
+        match &self.mode {
+            Some(mode) => mode.to_string(),
+            None => "Unknown".to_string(),
+        }
+    }
 }
 
 /// # Panics
@@ -93,5 +176,5 @@ pub fn get_hostname() -> String {
                 .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
                 .map_err(|_| "unknown")
         })
-        .unwrap_or_else(|_| "unknown-pi".to_string())
+        .unwrap_or_else(|_| "unknown-host".to_string())
 }

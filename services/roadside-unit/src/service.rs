@@ -1,11 +1,8 @@
 use log::{error, info, warn};
 use std::error::Error;
-use std::time::Duration;
 
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::time::sleep;
 
 use crate::frame_loader::handle_frame;
 use crate::protocol_ext::ControllerReaderExt;
@@ -15,11 +12,11 @@ use inference::persistent::perform_onnx_inference_with_counts;
 
 use network::framing::{read_message, spawn_writer};
 
-use protocol::config::jetson_address;
+use protocol::config::zone_processor_address;
 use protocol::types::{ExperimentConfig, ExperimentMode, Frame};
 use protocol::{
-    current_timestamp_micros, ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message,
-    TimingMetadata,
+    current_timestamp_micros, get_hostname, ControlMessage, DeviceId, FrameMessage, InferenceMessage,
+    Message, TimingMetadata,
 };
 
 pub async fn run_experiment_cycle(
@@ -57,34 +54,45 @@ async fn handle_local_experiment(
         InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
 
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
-
     ctrl_reader.wait_for_start().await?;
-    info!("Experiment started (local Rust inference)");
+
+    info!("Experiment started (local mode)");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel();
+    let source_device = get_hostname();
 
-    manager.start_inference(result_tx, config.clone(), |frame, detector, _cfg| {
+    manager.start_inference(result_tx, config.clone(), move |mut frame, detector, _cfg| {
+        frame.timing.inference_start = Some(current_timestamp_micros());
+
         let inference = perform_onnx_inference_with_counts(&frame, detector)?;
+
+        frame.timing.inference_complete = Some(current_timestamp_micros());
+        frame.timing.send_start = Some(current_timestamp_micros());
 
         Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
     });
 
-    let result =
-        run_local_experiment_loop(ctrl_reader, ctrl_tx.clone(), &mut result_rx, &manager, &config)
-            .await;
+    let result = run_local_loop(
+        ctrl_reader,
+        ctrl_tx.clone(),
+        &mut result_rx,
+        &manager,
+        &config,
+        &source_device,
+    )
+    .await;
 
     manager.shutdown().await;
-    sleep(Duration::from_secs(2)).await;
-
     result
 }
 
-async fn run_local_experiment_loop(
+async fn run_local_loop(
     ctrl_reader: &mut OwnedReadHalf,
     ctrl_tx: mpsc::Sender<Message>,
     result_rx: &mut mpsc::UnboundedReceiver<InferenceMessage>,
     manager: &InferenceManager,
     config: &ExperimentConfig,
+    source_device: &str,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         tokio::select! {
@@ -97,11 +105,15 @@ async fn run_local_experiment_loop(
             msg = read_message(ctrl_reader) => {
                 match msg? {
                     Message::Pulse(mut timing) => {
-                        timing.pi_capture_start = Some(current_timestamp_micros());
+                        timing.source_device = source_device.to_string();
+
+                        timing.capture_start = Some(current_timestamp_micros());
 
                         let frame_number = timing.frame_number;
                         match handle_frame(frame_number, &config.encoding_spec) {
                             Ok((frame_data, width, height)) => {
+                                timing.encode_complete = Some(current_timestamp_micros());
+
                                 let frame_msg = FrameMessage {
                                     sequence_id: timing.sequence_id,
                                     timing,
@@ -112,6 +124,7 @@ async fn run_local_experiment_loop(
                                         encoding: config.encoding_spec.clone(),
                                     },
                                 };
+
                                 manager.update_pending_frame(frame_msg);
                             }
                             Err(e) => error!("Failed to load frame {frame_number}: {e}"),
@@ -123,7 +136,7 @@ async fn run_local_experiment_loop(
                         return Ok(());
                     }
 
-                    msg => warn!("Unexpected message during experiment: {msg:?}"),
+                    msg => warn!("Unexpected message: {msg:?}"),
                 }
             }
         }
@@ -135,10 +148,10 @@ async fn handle_offload_experiment(
     ctrl_tx: mpsc::Sender<Message>,
     config: ExperimentConfig,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Connecting to Jetson at {}", jetson_address());
+    info!("Connecting to Zone Processor at {}", zone_processor_address());
 
-    let jetson_tx = loop {
-        match TcpStream::connect(jetson_address()).await {
+    let zp_tx = loop {
+        match tokio::net::TcpStream::connect(zone_processor_address()).await {
             Ok(stream) => {
                 let (_reader, writer) = stream.into_split();
                 let tx = spawn_writer(writer, 10);
@@ -146,21 +159,24 @@ async fn handle_offload_experiment(
                 break tx;
             }
             Err(e) => {
-                warn!("Jetson connection failed: {e}, retrying...");
-                sleep(Duration::from_secs(2)).await;
+                warn!("Zone Processor connection failed: {e}, retrying...");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
     };
 
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
-
     ctrl_reader.wait_for_start().await?;
-    info!("Experiment started (offload mode)");
+
+    info!("Experiment started (remote mode)");
+
+    let source_device = get_hostname();
 
     loop {
         match read_message(ctrl_reader).await? {
             Message::Pulse(timing) => {
-                if let Err(e) = run_offload_experiment_loop(timing, &config, &jetson_tx).await {
+                if let Err(e) = process_remote_frame(timing, &config, &zp_tx, &source_device).await
+                {
                     error!("Remote frame failed: {e}");
                 }
             }
@@ -177,17 +193,25 @@ async fn handle_offload_experiment(
     Ok(())
 }
 
-async fn run_offload_experiment_loop(
+async fn process_remote_frame(
     mut timing: TimingMetadata,
     config: &ExperimentConfig,
-    jetson_tx: &mpsc::Sender<Message>,
+    zp_tx: &mpsc::Sender<Message>,
+    source_device: &str,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    timing.pi_capture_start = Some(current_timestamp_micros());
+    timing.source_device = source_device.to_string();
+
+    // Start capturing frame
+    timing.capture_start = Some(current_timestamp_micros());
 
     let frame_number = timing.frame_number;
     let (frame_data, width, height) = handle_frame(frame_number, &config.encoding_spec)?;
 
-    timing.pi_sent_to_jetson = Some(current_timestamp_micros());
+    // Frame encoding complete
+    timing.encode_complete = Some(current_timestamp_micros());
+
+    // Start sending to zone processor
+    timing.send_start = Some(current_timestamp_micros());
 
     let frame_msg = FrameMessage {
         sequence_id: timing.sequence_id,
@@ -195,7 +219,7 @@ async fn run_offload_experiment_loop(
         frame: Frame { frame_data, width, height, encoding: config.encoding_spec.clone() },
     };
 
-    jetson_tx.send(Message::Frame(frame_msg)).await.map_err(|_| "Jetson channel closed")?;
+    zp_tx.send(Message::Frame(frame_msg)).await.map_err(|_| "Zone Processor channel closed")?;
 
     Ok(())
 }

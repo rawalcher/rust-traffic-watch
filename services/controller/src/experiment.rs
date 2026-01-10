@@ -2,7 +2,7 @@ use std::error::Error;
 use tokio::time::{sleep, Duration};
 use tracing::{error, info};
 
-use protocol::config::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, SEND_FPS};
+use protocol::config::{DEFAULT_DURATION_SECONDS, DEFAULT_MODEL, DEFAULT_SEND_FPS};
 use protocol::types::ImageCodecKind::{JpgLossy, PngLossless, WebpLossless, WebpLossy};
 use protocol::types::ImageResolutionType::{Letterbox, FHD, HD};
 use protocol::types::{
@@ -163,7 +163,7 @@ pub async fn run_single_experiment(
         .iter()
         .find(|arg| arg.starts_with("--fps="))
         .and_then(|arg| arg.trim_start_matches("--fps=").parse::<u64>().ok())
-        .unwrap_or(SEND_FPS);
+        .unwrap_or(DEFAULT_SEND_FPS);
 
     let modes = match args.iter().find(|a| *a == "--local" || *a == "--remote") {
         Some(flag) if flag == "--local" => vec![ExperimentMode::Local],

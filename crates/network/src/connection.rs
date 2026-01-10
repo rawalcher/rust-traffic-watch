@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::Result;
-use protocol::config::{controller_bind_address, jetson_bind_address};
 use log::info;
 use once_cell::sync::Lazy;
+use protocol::config::{controller_bind_address, zone_processor_bind_address};
 use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
@@ -21,12 +21,8 @@ static READY_DEVICES: Lazy<Mutex<HashSet<DeviceId>>> = Lazy::new(|| Mutex::new(H
 
 #[derive(Clone)]
 pub enum Role {
-    Controller {
-        result_handler: mpsc::UnboundedSender<InferenceMessage>,
-    },
-    Jetson {
-        frame_handler: mpsc::UnboundedSender<FrameMessage>,
-    },
+    Controller { result_handler: mpsc::UnboundedSender<InferenceMessage> },
+    ZoneProcessor { frame_handler: mpsc::UnboundedSender<FrameMessage> },
 }
 
 pub async fn start_controller_listener(role: Role) -> tokio::io::Result<()> {
@@ -47,9 +43,9 @@ pub async fn start_controller_listener(role: Role) -> tokio::io::Result<()> {
     }
 }
 
-pub async fn wait_for_pi_on_jetson(role: Role) -> tokio::io::Result<()> {
-    let addr = jetson_bind_address();
-    debug!("Jetson binding to {}", addr);
+pub async fn wait_for_rsu_on_zone_processor(role: Role) -> tokio::io::Result<()> {
+    let addr = zone_processor_bind_address();
+    debug!("Zone Processor binding to {}", addr);
 
     let listener = TcpListener::bind(&addr).await.map_err(|e| {
         error!("Failed to bind to {}: {}", addr, e);
@@ -57,11 +53,9 @@ pub async fn wait_for_pi_on_jetson(role: Role) -> tokio::io::Result<()> {
     })?;
 
     let (stream, peer) = listener.accept().await?;
-    debug!("Jetson accepted connection from {}", peer);
+    debug!("Zone Processor accepted connection from {}", peer);
 
-    handle_device_connection(stream, role)
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()))
+    handle_device_connection(stream, role).await.map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 pub async fn handle_device_connection(stream: TcpStream, role: Role) -> Result<()> {
@@ -104,7 +98,7 @@ pub async fn handle_device_connection(stream: TcpStream, role: Role) -> Result<(
                         mark_device_ready(device_id).await;
                         info!("{device_id:?} is now ready");
                     }
-                    (Role::Jetson { frame_handler }, Message::Frame(frame)) => {
+                    (Role::ZoneProcessor { frame_handler }, Message::Frame(frame)) => {
                         let _ = frame_handler.send(frame);
                     }
                     _ => {}

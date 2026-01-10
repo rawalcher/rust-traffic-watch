@@ -1,5 +1,5 @@
 use crate::config::{
-    DEFAULT_DURATION_SECONDS, JPEG_QUALITY, PNG_ZLIB_LEVEL, SEND_FPS, WEBP_LOSSLESS_METHOD,
+    DEFAULT_DURATION_SECONDS, DEFAULT_SEND_FPS, JPEG_QUALITY, PNG_ZLIB_LEVEL, WEBP_LOSSLESS_METHOD,
     WEBP_LOSSY_QUALITY,
 };
 use image::codecs::png;
@@ -86,7 +86,7 @@ impl ExperimentConfig {
             mode,
             encoding_spec,
             duration_seconds: DEFAULT_DURATION_SECONDS,
-            fixed_fps: SEND_FPS,
+            fixed_fps: DEFAULT_SEND_FPS,
         }
     }
 }

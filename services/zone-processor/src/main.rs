@@ -4,7 +4,7 @@ use inference::inference_manager::InferenceManager;
 use inference::persistent::perform_onnx_inference_with_counts;
 
 use network::framing::{read_message, read_message_stream, spawn_writer};
-use protocol::config::{controller_address, jetson_bind_address};
+use protocol::config::{controller_address, zone_processor_bind_address};
 use protocol::types::ExperimentConfig;
 use protocol::{
     current_timestamp_micros, ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message,
@@ -39,37 +39,44 @@ async fn run_experiment_cycle(
         }
     };
 
-    info!("Initializing ONNX inference manager...");
+    info!(
+        "Received experiment config: mode={:?}, model={}, codec={:?}, tier={:?}",
+        config.mode, config.model_name, config.encoding_spec.codec, config.encoding_spec.tier
+    );
+
+    info!("Initializing ONNX inference manager with model '{}'", config.model_name);
     let mut manager =
         InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
 
-    info!("Waiting for Pi to connect on {}...", jetson_bind_address());
-    let listener = TcpListener::bind(jetson_bind_address()).await?;
+    info!("Waiting for RSU to connect on {}...", zone_processor_bind_address());
+    let listener = TcpListener::bind(zone_processor_bind_address()).await?;
 
-    let (mut pi_stream, pi_addr) = listener.accept().await?;
-    info!("Pi connected from {pi_addr}");
+    let (mut rsu_stream, rsu_addr) = listener.accept().await?;
+    info!("RSU connected from {rsu_addr}");
 
     drop(listener);
-    info!("Listener dropped, port freed");
+    info!("Listener dropped, port freed for next experiment");
 
-    let hello = read_message_stream(&mut pi_stream).await?;
+    let hello = read_message_stream(&mut rsu_stream).await?;
     match hello {
-        Message::Hello(DeviceId::RoadsideUnit(_)) => {
-            info!("Pi hello received");
+        Message::Hello(DeviceId::RoadsideUnit(id)) => {
+            info!("RSU-{id:04} hello received");
         }
-        other => warn!("Unexpected hello from Pi: {other:?}"),
+        other => {
+            warn!("Unexpected hello from RSU: {other:?}");
+        }
     }
 
-    let (mut pi_reader, _pi_writer) = pi_stream.into_split();
+    let (mut rsu_reader, _rsu_writer) = rsu_stream.into_split();
 
     let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<FrameMessage>();
     let frame_tx_clone = frame_tx.clone();
 
-    let pi_handler = tokio::spawn(async move {
+    let rsu_handler = tokio::spawn(async move {
         loop {
-            match read_message(&mut pi_reader).await {
+            match read_message(&mut rsu_reader).await {
                 Ok(Message::Frame(frame)) => {
-                    info!("Jetson received frame from Pi: sequence_id={}", frame.sequence_id);
+                    info!("ZP received frame from RSU: sequence_id={}", frame.sequence_id);
 
                     if frame_tx_clone.send(frame).is_err() {
                         error!("Failed to forward frame to inference pipeline");
@@ -77,32 +84,51 @@ async fn run_experiment_cycle(
                     }
                 }
                 Ok(Message::Control(ControlMessage::Shutdown)) => {
-                    info!("Pi sent shutdown");
+                    info!("RSU sent shutdown signal");
                     break;
                 }
-                Ok(other) => debug!("Pi sent: {other:?}"),
-                Err(_) => {
-                    info!("Pi disconnected");
+                Ok(other) => debug!("RSU sent: {other:?}"),
+                Err(e) => {
+                    info!("RSU disconnected: {e:?}");
                     break;
                 }
             }
         }
+        info!("RSU handler task finished");
     });
 
     info!("Sending ReadyToStart to controller");
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
 
     wait_for_experiment_start(ctrl_reader).await?;
-    info!("Experiment started (Jetson ONNX inference)");
+    info!("Experiment started - ZP is now processing frames");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
-    manager.start_inference(result_tx, config.clone(), |mut frame, detector, _cfg| {
-        frame.timing.jetson_received = Some(current_timestamp_micros());
+    manager.start_inference(result_tx, config.clone(), move |mut frame, detector, _cfg| {
+        frame.timing.receive_start = Some(current_timestamp_micros());
 
+        frame.timing.inference_start = Some(current_timestamp_micros());
         let inference = perform_onnx_inference_with_counts(&frame, detector)?;
+        frame.timing.inference_complete = Some(current_timestamp_micros());
 
-        frame.timing.jetson_sent_result = Some(current_timestamp_micros());
+        frame.timing.send_result = Some(current_timestamp_micros());
+
+        if let (Some(recv), Some(inf_start), Some(inf_end), Some(send)) = (
+            frame.timing.receive_start,
+            frame.timing.inference_start,
+            frame.timing.inference_complete,
+            frame.timing.send_result,
+        ) {
+            let prep_time = inf_start.saturating_sub(recv);
+            let inference_time = inf_end.saturating_sub(inf_start);
+            let send_prep = send.saturating_sub(inf_end);
+
+            debug!(
+                "ZP timing breakdown for seq={}: prep={}us, inference={}us, send_prep={}us",
+                frame.sequence_id, prep_time, inference_time, send_prep
+            );
+        }
 
         Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
     });
@@ -111,8 +137,9 @@ async fn run_experiment_cycle(
         tokio::select! {
             Some(result) = result_rx.recv() => {
                 info!(
-                    "Sending inference result for sequence_id {} to controller",
-                    result.sequence_id
+                    "Sending inference result for seq={} to controller (detections={})",
+                    result.sequence_id,
+                    result.inference.detection_count
                 );
 
                 if ctrl_tx.send(Message::Result(result)).await.is_err() {
@@ -122,33 +149,29 @@ async fn run_experiment_cycle(
             }
 
             Some(frame) = frame_rx.recv() => {
+                debug!("Forwarding frame seq={} to inference pipeline", frame.sequence_id);
                 manager.update_pending_frame(frame);
             }
 
             msg = read_message(ctrl_reader) => {
                 match msg? {
-                    Message::Frame(frame) => {
-                        warn!("Unexpected frame from controller, forwarding to pipeline");
-                        let _ = frame_tx.send(frame);
-                    }
-
                     Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received from controller, tearing down");
+                        info!("Shutdown signal received from controller");
 
                         drop(frame_tx);
-                        pi_handler.abort();
-
+                        rsu_handler.abort();
                         manager.shutdown().await;
+
                         break;
                     }
 
-                    other => warn!("Unexpected controller message: {other:?}"),
+                    other => warn!("Unexpected controller message during experiment: {other:?}"),
                 }
             }
         }
     }
 
-    info!("Experiment cycle complete");
+    info!("Experiment cycle complete - ready for next experiment");
     Ok(true)
 }
 
@@ -157,7 +180,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
     loop {
-        info!("Jetson connecting to controller at {}", controller_address());
+        info!("Zone Processor connecting to controller at {}", controller_address());
 
         match TcpStream::connect(controller_address()).await {
             Ok(controller_stream) => {
@@ -165,15 +188,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 let ctrl_tx = spawn_writer(ctrl_writer, 10);
 
                 ctrl_tx.send(Message::Hello(DeviceId::ZoneProcessor(0))).await.ok();
+                info!("Sent hello to controller");
 
                 loop {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
                         Ok(true) => {
-                            info!("Ready for next experiment");
+                            info!("Experiment complete - ready for next one");
                             sleep(Duration::from_secs(2)).await;
                         }
                         Ok(false) => {
-                            info!("Clean shutdown received");
+                            info!("Clean shutdown received - exiting experiment loop");
                             break;
                         }
                         Err(e) => {
@@ -197,11 +221,13 @@ async fn wait_for_experiment_config(
 ) -> Result<ExperimentConfig, Box<dyn Error + Send + Sync>> {
     loop {
         match read_message(reader).await? {
-            Message::Control(ControlMessage::ConfigureExperiment { config }) => return Ok(config),
+            Message::Control(ControlMessage::ConfigureExperiment { config }) => {
+                return Ok(config);
+            }
             Message::Control(ControlMessage::Shutdown) => {
                 return Err("Shutdown during config wait".into());
             }
-            msg => warn!("Waiting for config, got: {msg:?}"),
+            msg => warn!("Waiting for config, received: {msg:?}"),
         }
     }
 }
@@ -211,11 +237,13 @@ async fn wait_for_experiment_start(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         match read_message(reader).await? {
-            Message::Control(ControlMessage::BeginExperiment) => return Ok(()),
+            Message::Control(ControlMessage::BeginExperiment) => {
+                return Ok(());
+            }
             Message::Control(ControlMessage::Shutdown) => {
                 return Err("Shutdown during start wait".into());
             }
-            msg => warn!("Waiting for start, got: {msg:?}"),
+            msg => warn!("Waiting for start signal, received: {msg:?}"),
         }
     }
 }
