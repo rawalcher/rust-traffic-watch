@@ -78,10 +78,10 @@ impl InferenceManager {
                         match inference_fn(frame, &mut detector, &config) {
                             Ok(msg) => {
                                 info!(
-                                    "Inference completed: seq={} detections={} time={}us",
+                                    "Inference completed: seq={} detections={} time={}ms",
                                     msg.sequence_id,
                                     msg.inference.detection_count,
-                                    msg.inference.processing_time_us,
+                                    msg.inference.processing_time_us/1000,
                                 );
                                 if result_tx.send(msg).is_err() {
                                     break;
