@@ -1,5 +1,6 @@
 mod service;
 
+use clap::Parser;
 use inference::inference_manager::InferenceManager;
 use inference::persistent::perform_onnx_inference_with_counts;
 
@@ -20,6 +21,13 @@ use tokio::time::sleep;
 
 use network::connection::{wait_for_config, wait_for_start};
 use tracing::{debug, error, info, warn};
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Zone Processor (ZP)")]
+struct Args {
+    #[arg(short, long, default_value_t = 0)]
+    id: u8,
+}
 
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -139,6 +147,11 @@ async fn run_experiment_cycle(
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
+    let args = Args::parse();
+    let device_id = DeviceId::ZoneProcessor(args.id);
+
+    info!("Starting {} (use --id to change)", device_id);
+
     loop {
         info!("Zone Processor connecting to controller at {}", controller_address());
 
@@ -147,7 +160,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
                 let ctrl_tx = spawn_writer(ctrl_writer, 10);
 
-                ctrl_tx.send(Message::Hello(DeviceId::ZoneProcessor(0))).await.ok();
+                ctrl_tx.send(Message::Hello(device_id)).await.ok();
                 info!("Sent hello to controller");
 
                 loop {

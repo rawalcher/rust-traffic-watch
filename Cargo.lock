@@ -139,17 +139,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-trait"
-version = "0.1.89"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "atomic-polyfill"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1842,7 +1831,7 @@ dependencies = [
 name = "roadside-unit"
 version = "0.1.0"
 dependencies = [
- "async-trait",
+ "clap",
  "image 0.25.9",
  "inference",
  "log",
@@ -2784,6 +2773,7 @@ checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
 name = "zone-processor"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "inference",
  "network",
  "protocol",

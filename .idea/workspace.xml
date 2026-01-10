@@ -32,13 +32,13 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="feat(zone-processor): allow multiple rsus to connect at the same time">
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="feat(cli): reworked argument passing by using CLAP">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/experiment.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -165,7 +165,7 @@
       <workItem from="1766347651086" duration="7340000" />
       <workItem from="1768073422907" duration="6037000" />
       <workItem from="1768085046462" duration="459000" />
-      <workItem from="1768082100490" duration="1336000" />
+      <workItem from="1768082100490" duration="3151000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -263,7 +263,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768081538518</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="feat(cli): reworked argument passing by using CLAP">
+      <option name="closed" value="true" />
+      <created>1768083586428</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1768083586428</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -293,7 +301,19 @@
     <MESSAGE value="refactor(logging): convert us to ms" />
     <MESSAGE value="chore: update readme.md" />
     <MESSAGE value="feat(zone-processor): allow multiple rsus to connect at the same time" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat(zone-processor): allow multiple rsus to connect at the same time" />
+    <MESSAGE value="feat(cli): reworked argument passing by using CLAP" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(cli): reworked argument passing by using CLAP" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/services/controller/src/service.rs</url>
+          <line>124</line>
+          <option name="timeStamp" value="1" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
