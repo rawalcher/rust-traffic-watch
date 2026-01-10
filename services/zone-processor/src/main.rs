@@ -5,7 +5,6 @@ use inference::persistent::perform_onnx_inference_with_counts;
 
 use network::framing::{read_message, read_message_stream, spawn_writer};
 use protocol::config::{controller_address, zone_processor_bind_address};
-use protocol::types::ExperimentConfig;
 use protocol::{
     current_timestamp_micros, ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message,
 };
@@ -18,25 +17,19 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
+use network::connection::{wait_for_config, wait_for_start};
 use tracing::{debug, error, info, warn};
 
 // TODO: handle Pi reconnects more gracefully (future work)
 // TODO: extract logic from pi and jetson that are same
-// TODO: refactor timestamping to remove jetson and pi references
 
 #[allow(clippy::too_many_lines)]
 async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
     ctrl_tx: mpsc::Sender<Message>,
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
-    let config = match wait_for_experiment_config(ctrl_reader).await {
-        Ok(c) => c,
-        Err(e) => {
-            if e.to_string().contains("Shutdown during") {
-                return Ok(false);
-            }
-            return Err(e);
-        }
+    let Some(config) = wait_for_config(ctrl_reader).await? else {
+        return Ok(false);
     };
 
     info!(
@@ -100,7 +93,7 @@ async fn run_experiment_cycle(
     info!("Sending ReadyToStart to controller");
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
 
-    wait_for_experiment_start(ctrl_reader).await?;
+    wait_for_start(ctrl_reader).await?;
     info!("Experiment started - ZP is now processing frames");
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
@@ -213,37 +206,5 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
 
         sleep(Duration::from_secs(10)).await;
-    }
-}
-
-async fn wait_for_experiment_config(
-    reader: &mut OwnedReadHalf,
-) -> Result<ExperimentConfig, Box<dyn Error + Send + Sync>> {
-    loop {
-        match read_message(reader).await? {
-            Message::Control(ControlMessage::ConfigureExperiment { config }) => {
-                return Ok(config);
-            }
-            Message::Control(ControlMessage::Shutdown) => {
-                return Err("Shutdown during config wait".into());
-            }
-            msg => warn!("Waiting for config, received: {msg:?}"),
-        }
-    }
-}
-
-async fn wait_for_experiment_start(
-    reader: &mut OwnedReadHalf,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    loop {
-        match read_message(reader).await? {
-            Message::Control(ControlMessage::BeginExperiment) => {
-                return Ok(());
-            }
-            Message::Control(ControlMessage::Shutdown) => {
-                return Err("Shutdown during start wait".into());
-            }
-            msg => warn!("Waiting for start signal, received: {msg:?}"),
-        }
     }
 }

@@ -5,11 +5,10 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::mpsc;
 
 use crate::frame_loader::handle_frame;
-use crate::protocol_ext::ControllerReaderExt;
 
 use inference::inference_manager::InferenceManager;
 use inference::persistent::perform_onnx_inference_with_counts;
-
+use network::connection::{wait_for_config, wait_for_start};
 use network::framing::{read_message, spawn_writer};
 
 use protocol::config::zone_processor_address;
@@ -23,14 +22,8 @@ pub async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
     ctrl_tx: mpsc::Sender<Message>,
 ) -> Result<bool, Box<dyn Error + Send + Sync>> {
-    let config = match ctrl_reader.wait_for_config().await {
-        Ok(c) => c,
-        Err(e) => {
-            if e.to_string().contains("Shutdown") {
-                return Ok(false);
-            }
-            return Err(e);
-        }
+    let Some(config) = wait_for_config(ctrl_reader).await? else {
+        return Ok(false);
     };
 
     match config.mode {
@@ -54,7 +47,7 @@ async fn handle_local_experiment(
         InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
 
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
-    ctrl_reader.wait_for_start().await?;
+    wait_for_start(ctrl_reader).await?;
 
     info!("Experiment started (local mode)");
 
@@ -166,7 +159,7 @@ async fn handle_offload_experiment(
     };
 
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
-    ctrl_reader.wait_for_start().await?;
+    wait_for_start(ctrl_reader).await?;
 
     info!("Experiment started (remote mode)");
 

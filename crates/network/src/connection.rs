@@ -1,16 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use crate::framing::{read_message, read_message_stream, send_message};
 use anyhow::Result;
 use log::info;
 use once_cell::sync::Lazy;
 use protocol::config::{controller_bind_address, zone_processor_bind_address};
+use protocol::types::ExperimentConfig;
 use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};
+use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, warn};
-
-use crate::framing::{read_message, read_message_stream, send_message};
 
 pub type DeviceSender = mpsc::UnboundedSender<Message>;
 pub type DeviceReceiver = mpsc::UnboundedReceiver<Message>;
@@ -172,4 +173,42 @@ pub async fn wait_for_device_readiness(expected: &[DeviceId]) {
 
 pub async fn clear_ready_devices() {
     READY_DEVICES.lock().await.clear();
+}
+
+pub async fn wait_for_config(reader: &mut OwnedReadHalf) -> Result<Option<ExperimentConfig>> {
+    loop {
+        match read_message(reader).await? {
+            Message::Control(ControlMessage::ConfigureExperiment { config }) => {
+                debug!(
+                    "Received experiment config: mode={:?}, model={}",
+                    config.mode, config.model_name
+                );
+                return Ok(Some(config));
+            }
+            Message::Control(ControlMessage::Shutdown) => {
+                debug!("Shutdown signal received while waiting for config");
+                return Ok(None);
+            }
+            msg => {
+                warn!("Waiting for config, ignored unexpected message: {:?}", msg);
+            }
+        }
+    }
+}
+
+pub async fn wait_for_start(reader: &mut OwnedReadHalf) -> Result<()> {
+    loop {
+        match read_message(reader).await? {
+            Message::Control(ControlMessage::BeginExperiment) => {
+                info!("Received start signal from controller");
+                return Ok(());
+            }
+            Message::Control(ControlMessage::Shutdown) => {
+                return Err(anyhow::anyhow!("Shutdown signal received while waiting for start"));
+            }
+            msg => {
+                warn!("Waiting for start, ignored unexpected message: {:?}", msg);
+            }
+        }
+    }
 }

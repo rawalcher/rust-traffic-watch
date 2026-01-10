@@ -1,5 +1,4 @@
 mod frame_loader;
-mod protocol_ext;
 mod service;
 
 use log::{error, info};

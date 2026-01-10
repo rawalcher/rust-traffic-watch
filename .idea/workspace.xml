@@ -34,13 +34,10 @@
   <component name="ChangeListManager">
     <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: replace jetson and pi naming with device-agnostic versions. made experiment logging more robust">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/network/src/connection.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/connection.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/protocol/src/messages.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/messages.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/protocol/src/types.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/types.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/csv_writer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/csv_writer.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/experiment.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/service.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/protocol_ext.rs" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/service.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
     </list>
@@ -87,7 +84,7 @@
     <option name="myRunOnSave" value="true" />
   </component>
   <component name="ProblemsViewState">
-    <option name="selectedTabId" value="CurrentFile" />
+    <option name="selectedTabId" value="ProjectErrors" />
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 4
@@ -218,7 +215,15 @@
       <option name="project" value="LOCAL" />
       <updated>1766351974275</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="refactor: replace jetson and pi naming with device-agnostic versions. made experiment logging more robust">
+      <option name="closed" value="true" />
+      <created>1768062889457</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1768062889457</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
