@@ -35,12 +35,14 @@ pub const WEBP_LOSSY_QUALITY: [f32; 3] = [90.0, 75.0, 60.0];
 /// [Best, Default, Fast]
 pub const WEBP_LOSSLESS_METHOD: [i32; 3] = [6, 3, 0];
 
+/// # Panics
 #[must_use]
 pub fn fps_to_interval(fps: u64) -> Duration {
     assert!(fps > 0, "FPS must not be zero");
     Duration::from_micros(1_000_000 / fps)
 }
 
+/// # Panics
 #[must_use]
 pub fn compute_skip(send_fps: u64) -> u64 {
     assert!(send_fps > 0, "send_fps must not be zero");

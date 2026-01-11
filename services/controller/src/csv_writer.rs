@@ -113,7 +113,7 @@ impl StreamingCsvWriter {
 
         self.count += 1;
 
-        if self.count % 10 == 0 {
+        if self.count.is_multiple_of(10) {
             self.writer.flush()?;
         }
 
@@ -126,7 +126,7 @@ impl StreamingCsvWriter {
         Ok(self.count)
     }
 
-    pub fn count(&self) -> usize {
+    pub const fn count(&self) -> usize {
         self.count
     }
 }
@@ -156,7 +156,7 @@ impl ConcurrentCsvWriter {
         self.inner.lock().await.count()
     }
 
-    pub async fn finalize(self) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    pub fn finalize(self) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let writer = Arc::try_unwrap(self.inner)
             .map_err(|_| "Cannot finalize: writer still has outstanding references")?
             .into_inner();

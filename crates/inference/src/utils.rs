@@ -152,8 +152,7 @@ fn find_max(array: &ndarray::ArrayView1<f32>) -> (usize, f32) {
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-        .map(|(idx, &val)| (idx, val))
-        .unwrap_or((0, f32::MIN))
+        .map_or((0, f32::MIN), |(idx, &val)| (idx, val))
 }
 
 /// Non-maximum suppression to remove overlapping boxes

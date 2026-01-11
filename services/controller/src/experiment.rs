@@ -156,7 +156,7 @@ async fn run_test_suite(
         for fps in &args.fps_values {
             for mode in &modes {
                 current += 1;
-                let experiment_id = format!("{}_{}_{}fps_suite", mode, model, fps);
+                let experiment_id = format!("{mode}_{model}_{fps}fps_suite");
 
                 info!("[{}/{}] Running: {}", current, total, experiment_id);
 

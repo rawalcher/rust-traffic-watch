@@ -46,7 +46,7 @@ async fn handle_local_experiment(
     device_id: DeviceId,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut manager =
-        InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
+        InferenceManager::new(config.model_name.clone(), &std::path::PathBuf::from("models"))?;
 
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
     wait_for_start(ctrl_reader).await?;

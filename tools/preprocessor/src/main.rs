@@ -24,13 +24,13 @@ struct ConversionStats {
 }
 
 impl ConversionStats {
-    fn new(total: usize) -> Self {
+    const fn new(total: usize) -> Self {
         Self { total, succeeded: AtomicUsize::new(0), failed: AtomicUsize::new(0) }
     }
 
     fn report_success(&self) {
         let current = self.succeeded.fetch_add(1, Ordering::Relaxed) + 1;
-        if current % 50 == 0 || current == self.total {
+        if current.is_multiple_of(50) || current == self.total {
             let percent = (current as f32 / self.total as f32) * 100.0;
             info!("Progress: {}/{} ({:.1}%)", current, self.total, percent);
         }
@@ -153,11 +153,12 @@ fn main() -> Result<()> {
 }
 
 pub mod image_processing {
-    use super::*;
+    use super::{ImageCodecKind, ImageResolutionType, Result, Tier};
     use image::{
         imageops::FilterType, DynamicImage, ExtendedColorType, GenericImageView, ImageEncoder,
     };
 
+    #[must_use]
     pub fn resize_image(img: &DynamicImage, target_res: ImageResolutionType) -> DynamicImage {
         match target_res {
             ImageResolutionType::FHD => img.clone(),
@@ -166,6 +167,7 @@ pub mod image_processing {
         }
     }
 
+    /// # Errors
     pub fn encode_only(img: &DynamicImage, codec: ImageCodecKind, tier: Tier) -> Result<Vec<u8>> {
         match codec {
             ImageCodecKind::JpgLossy => encode_jpeg(img, tier),
@@ -191,7 +193,7 @@ pub mod image_processing {
         let offset_x = (target_w - new_w) / 2;
         let offset_y = (target_h - new_h) / 2;
 
-        image::imageops::overlay(&mut canvas, &resized, offset_x as i64, offset_y as i64);
+        image::imageops::overlay(&mut canvas, &resized, i64::from(offset_x), i64::from(offset_y));
         canvas
     }
 
@@ -220,7 +222,7 @@ pub mod image_processing {
 
         let mut c = Compress::new(ColorSpace::JCS_RGB);
         c.set_size(w, h);
-        c.set_quality(q as f32);
+        c.set_quality(f32::from(q));
         // Optimization: Disable progressive for Tier 3 for speed
         if tier != Tier::T3 {
             c.set_scan_optimization_mode(ScanMode::Auto);
@@ -237,11 +239,11 @@ pub mod image_processing {
         let (w, h) = rgba.dimensions();
         let enc = webp::Encoder::from_rgba(&rgba, w, h);
 
-        let mut cfg = webp::WebPConfig::new().map_err(|_| anyhow::anyhow!("WebP config error"))?;
+        let mut cfg = webp::WebPConfig::new().map_err(|()| anyhow::anyhow!("WebP config error"))?;
         cfg.lossless = 1;
         cfg.method = protocol::types::tiers::webp_lossless_method(tier);
 
-        let mem = enc.encode_advanced(&cfg).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        let mem = enc.encode_advanced(&cfg).map_err(|e| anyhow::anyhow!("{e:?}"))?;
         Ok(mem.to_vec())
     }
 
@@ -250,11 +252,11 @@ pub mod image_processing {
         let (w, h) = rgb.dimensions();
         let enc = webp::Encoder::from_rgb(&rgb, w, h);
 
-        let mut cfg = webp::WebPConfig::new().map_err(|_| anyhow::anyhow!("WebP config error"))?;
+        let mut cfg = webp::WebPConfig::new().map_err(|()| anyhow::anyhow!("WebP config error"))?;
         cfg.quality = protocol::types::tiers::webp_lossy_quality(tier);
         cfg.method = 4;
 
-        let mem = enc.encode_advanced(&cfg).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        let mem = enc.encode_advanced(&cfg).map_err(|e| anyhow::anyhow!("{e:?}"))?;
         Ok(mem.to_vec())
     }
 }

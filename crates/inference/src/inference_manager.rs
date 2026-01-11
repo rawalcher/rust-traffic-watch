@@ -3,7 +3,7 @@ use protocol::types::ExperimentConfig;
 use protocol::{FrameMessage, InferenceMessage};
 
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch};
@@ -16,13 +16,14 @@ pub struct InferenceManager {
 }
 
 impl InferenceManager {
+    /// # Errors
     pub fn new(
         model_name: String,
-        models_dir: PathBuf,
+        models_dir: &Path,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         info!("Initializing Rust inference with model '{}'", model_name);
 
-        let _ = PersistentOnnxDetector::new(model_name, models_dir.clone())?;
+        let _ = PersistentOnnxDetector::new(model_name, models_dir.to_path_buf())?;
 
         let (frame_tx, _frame_rx) = watch::channel::<Option<FrameMessage>>(None);
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);

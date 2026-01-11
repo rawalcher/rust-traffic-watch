@@ -23,6 +23,7 @@ pub struct OnnxDetector {
 }
 
 impl OnnxDetector {
+    /// # Errors
     pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self> {
         let path = model_path.as_ref();
         let model_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
@@ -48,6 +49,7 @@ impl OnnxDetector {
         Ok(Self { session, model_name, class_names, allowed_classes })
     }
 
+    /// # Errors
     pub fn detect(&mut self, image_bytes: &[u8]) -> Result<InferenceResult> {
         let start = Instant::now();
 

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::info;
 
@@ -16,6 +16,8 @@ pub struct PersistentOnnxDetector {
 }
 
 impl PersistentOnnxDetector {
+    /// # Errors
+    /// # Panics
     pub fn new(model_name: String, models_dir: PathBuf) -> Result<Self> {
         info!("Loading ONNX model '{}'", model_name);
         let model_path = Self::resolve_model_path(&model_name, &models_dir)?;
@@ -31,6 +33,8 @@ impl PersistentOnnxDetector {
         })
     }
 
+    /// # Errors
+    /// # Panics
     pub fn reload_model(&mut self, new_model: &str) -> Result<()> {
         info!("Reloading ONNX model to '{}'", new_model);
         let model_path = Self::resolve_model_path(new_model, &self.models_dir)?;
@@ -46,25 +50,34 @@ impl PersistentOnnxDetector {
         Ok(())
     }
 
-    fn resolve_model_path(model_name: &str, models_dir: &PathBuf) -> Result<PathBuf> {
-        let exact_path = models_dir.join(format!("{}.onnx", model_name));
+    fn resolve_model_path(model_name: &str, models_dir: &Path) -> Result<PathBuf> {
+        let exact_path = models_dir.join(format!("{model_name}.onnx"));
         if exact_path.exists() {
             return Ok(exact_path);
         }
 
-        let with_ext = if model_name.ends_with(".onnx") {
+        let with_ext = if Path::new(model_name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("onnx"))
+        {
             models_dir.join(model_name)
         } else {
-            models_dir.join(format!("{}.onnx", model_name))
+            models_dir.join(format!("{model_name}.onnx"))
         };
 
         if with_ext.exists() {
             return Ok(with_ext);
         }
 
-        anyhow::bail!("Model file not found: {:?} or {:?}", exact_path, with_ext)
+        anyhow::bail!(
+            "Model file not found: {:?} or {:?}",
+            exact_path.display(),
+            with_ext.display()
+        );
     }
 
+    /// # Errors
+    /// # Panics
     pub fn detect_objects(&mut self, image_bytes: &[u8], _mode: &str) -> Result<InferenceResult> {
         self.last_activity = Instant::now();
         self.inference_count += 1;
@@ -73,6 +86,7 @@ impl PersistentOnnxDetector {
         self.detector.detect(image_bytes)
     }
 
+    #[must_use]
     pub fn stats(&self) -> DetectorStats {
         let uptime = self.start_time.elapsed();
         let idle_time = self.last_activity.elapsed();
@@ -102,6 +116,7 @@ pub struct DetectorStats {
     pub idle_secs: u64,
 }
 
+/// # Errors
 pub fn perform_onnx_inference_with_counts(
     frame_message: &mut FrameMessage,
     detector: &mut PersistentOnnxDetector,

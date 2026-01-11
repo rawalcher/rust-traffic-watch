@@ -40,7 +40,8 @@ impl ControllerHarness {
         let forwarder_task = tokio::spawn(async move {
             let sink_rx = active_sink_rx;
             while let Some(msg) = raw_rx.recv().await {
-                if let Some(sink) = sink_rx.borrow().clone() {
+                let value = sink_rx.borrow().clone();
+                if let Some(sink) = value {
                     let _ = sink.send(msg);
                 }
             }
@@ -80,7 +81,7 @@ impl ControllerHarness {
         }
     }
 
-    pub fn advance_frame(frame: u64, skip: u64, max: u64) -> u64 {
+    pub const fn advance_frame(frame: u64, skip: u64, max: u64) -> u64 {
         ((frame + skip - 1) % max) + 1
     }
 
@@ -149,7 +150,7 @@ impl ControllerHarness {
         });
 
         let rsu_devices: Vec<DeviceId> =
-            (0..config.num_roadside_units).map(|i| DeviceId::RoadsideUnit(i)).collect();
+            (0..config.num_roadside_units).map(DeviceId::RoadsideUnit).collect();
 
         let required_devices = match config.mode {
             ExperimentMode::Local => rsu_devices,
@@ -215,7 +216,7 @@ impl ControllerHarness {
                 sequence_id += 1;
                 frame_number = Self::advance_frame(frame_number, frame_skip, MAX_FRAME_SEQUENCE);
                 expected_results =
-                    expected_results.saturating_add(config.num_roadside_units as u64);
+                    expected_results.saturating_add(u64::from(config.num_roadside_units));
             }
 
             sleep(pulse_interval).await;
@@ -224,7 +225,7 @@ impl ControllerHarness {
         info!(
             "Finished sending {} pulses ({} pulses/RSU). Waiting 5 seconds for results...",
             expected_results,
-            expected_results / (config.num_roadside_units as u64)
+            expected_results / u64::from(config.num_roadside_units)
         );
         sleep(Duration::from_secs(5)).await;
 
@@ -261,8 +262,7 @@ impl ControllerHarness {
 
         info!("Shutdown complete");
 
-        // CHANGED: Finalize CSV writer instead of batch writing
-        let final_count = csv_writer.finalize().await?;
+        let final_count = csv_writer.finalize()?;
         info!("Experiment {} completed with {} results saved", config.experiment_id, final_count);
         Ok(())
     }

@@ -4,7 +4,6 @@ use std::time::Duration;
 use crate::framing::{read_message, read_message_stream, send_message};
 use anyhow::Result;
 use log::info;
-use once_cell::sync::Lazy;
 use protocol::config::{controller_bind_address, zone_processor_bind_address};
 use protocol::types::ExperimentConfig;
 use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};
@@ -16,9 +15,10 @@ use tracing::{debug, error, warn};
 pub type DeviceSender = mpsc::UnboundedSender<Message>;
 pub type DeviceReceiver = mpsc::UnboundedReceiver<Message>;
 
-static DEVICES: Lazy<Mutex<HashMap<DeviceId, DeviceSender>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static READY_DEVICES: Lazy<Mutex<HashSet<DeviceId>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+static DEVICES: std::sync::LazyLock<Mutex<HashMap<DeviceId, DeviceSender>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static READY_DEVICES: std::sync::LazyLock<Mutex<HashSet<DeviceId>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Clone)]
 pub enum Role {
@@ -26,6 +26,7 @@ pub enum Role {
     ZoneProcessor { frame_handler: mpsc::UnboundedSender<FrameMessage> },
 }
 
+/// # Errors
 pub async fn start_controller_listener(role: Role) -> tokio::io::Result<()> {
     let addr = controller_bind_address();
     let listener = TcpListener::bind(&addr).await?;
@@ -44,6 +45,7 @@ pub async fn start_controller_listener(role: Role) -> tokio::io::Result<()> {
     }
 }
 
+/// # Errors
 pub async fn wait_for_rsu_on_zone_processor(role: Role) -> tokio::io::Result<()> {
     let addr = zone_processor_bind_address();
     debug!("Zone Processor binding to {}", addr);
@@ -59,6 +61,7 @@ pub async fn wait_for_rsu_on_zone_processor(role: Role) -> tokio::io::Result<()>
     handle_device_connection(stream, role).await.map_err(|e| std::io::Error::other(e.to_string()))
 }
 
+/// # Errors
 pub async fn handle_device_connection(stream: TcpStream, role: Role) -> Result<()> {
     let mut stream = stream;
     let hello = read_message_stream(&mut stream).await?;
@@ -175,6 +178,7 @@ pub async fn clear_ready_devices() {
     READY_DEVICES.lock().await.clear();
 }
 
+/// # Errors
 pub async fn wait_for_config(reader: &mut OwnedReadHalf) -> Result<Option<ExperimentConfig>> {
     loop {
         match read_message(reader).await? {
@@ -196,6 +200,7 @@ pub async fn wait_for_config(reader: &mut OwnedReadHalf) -> Result<Option<Experi
     }
 }
 
+/// # Errors
 pub async fn wait_for_start(reader: &mut OwnedReadHalf) -> Result<()> {
     loop {
         match read_message(reader).await? {

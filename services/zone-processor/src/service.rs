@@ -30,7 +30,7 @@ pub async fn run_experiment_cycle(
 
     info!("Initializing ONNX inference manager with model '{}'", config.model_name);
     let mut manager =
-        InferenceManager::new(config.model_name.clone(), std::path::PathBuf::from("models"))?;
+        InferenceManager::new(config.model_name.clone(), &std::path::PathBuf::from("models"))?;
 
     info!(
         "Waiting for {num_roadside_units} RSUs to connect on {}...",

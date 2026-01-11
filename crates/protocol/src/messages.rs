@@ -92,17 +92,17 @@ impl TimingMetadata {
     }
 
     #[must_use]
-    pub fn is_local_mode(&self) -> bool {
+    pub const fn is_local_mode(&self) -> bool {
         matches!(self.mode, Some(ExperimentMode::Local))
     }
 
     #[must_use]
-    pub fn is_remote_mode(&self) -> bool {
+    pub const fn is_remote_mode(&self) -> bool {
         matches!(self.mode, Some(ExperimentMode::Offload))
     }
 
     #[must_use]
-    pub fn total_latency(&self) -> Option<u64> {
+    pub const fn total_latency(&self) -> Option<u64> {
         match (self.controller_sent_pulse, self.controller_received) {
             (Some(start), Some(end)) => Some(end.saturating_sub(start)),
             _ => None,
@@ -110,7 +110,7 @@ impl TimingMetadata {
     }
 
     #[must_use]
-    pub fn rsu_overhead(&self) -> Option<u64> {
+    pub const fn rsu_overhead(&self) -> Option<u64> {
         match (self.capture_start, self.send_start) {
             (Some(start), Some(end)) => Some(end.saturating_sub(start)),
             _ => None,
@@ -118,7 +118,7 @@ impl TimingMetadata {
     }
 
     #[must_use]
-    pub fn network_latency(&self) -> Option<u64> {
+    pub const fn network_latency(&self) -> Option<u64> {
         if self.is_local_mode() {
             return None;
         }
@@ -130,7 +130,7 @@ impl TimingMetadata {
     }
 
     #[must_use]
-    pub fn zp_overhead(&self) -> Option<u64> {
+    pub const fn zp_overhead(&self) -> Option<u64> {
         if self.is_local_mode() {
             return None;
         }
@@ -142,7 +142,7 @@ impl TimingMetadata {
     }
 
     #[must_use]
-    pub fn inference_time(&self) -> Option<u64> {
+    pub const fn inference_time(&self) -> Option<u64> {
         match (self.inference_start, self.inference_complete) {
             (Some(start), Some(end)) => Some(end.saturating_sub(start)),
             _ => None,
@@ -151,10 +151,7 @@ impl TimingMetadata {
 
     #[must_use]
     pub fn mode_str(&self) -> String {
-        match &self.mode {
-            Some(mode) => mode.to_string(),
-            None => "Unknown".to_string(),
-        }
+        self.mode.as_ref().map_or_else(|| "Unknown".to_string(), ToString::to_string)
     }
 }
 
