@@ -1,12 +1,11 @@
 use std::error::Error;
 use std::sync::Arc;
-
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{debug, info, warn};
 
-use super::csv_writer::generate_analysis_csv;
+use crate::csv_writer::ConcurrentCsvWriter;
 use network::connection;
 use network::connection::{
     get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role,
@@ -102,14 +101,17 @@ impl ControllerHarness {
         connection::clear_ready_devices().await;
 
         let (inference_tx, mut inference_rx) = mpsc::unbounded_channel::<InferenceMessage>();
-        let results: Arc<Mutex<Vec<InferenceMessage>>> = Arc::new(Mutex::new(Vec::new()));
-        let results_clone = Arc::clone(&results);
+
+        // CHANGED: Use streaming CSV writer instead of buffering all results
+        let csv_writer = ConcurrentCsvWriter::new(&config.experiment_id, config.clone())?;
 
         let _ = self.active_sink_tx.send(Some(inference_tx.clone()));
 
         let (stop_tx, mut stop_rx) = watch::channel(false);
+
+        // CHANGED: Write results directly to CSV as they arrive
+        let csv_writer_clone = csv_writer.clone();
         let result_collection_task = tokio::spawn(async move {
-            let mut count = 0usize;
             loop {
                 tokio::select! {
                     _ = stop_rx.changed() => {
@@ -119,22 +121,31 @@ impl ControllerHarness {
                         match maybe {
                             Some(mut result) => {
                                 result.timing.controller_received = Some(current_timestamp_micros());
-                                count += 1;
-                                info!(
+
+                                // Write to CSV immediately
+                                if let Err(e) = csv_writer_clone.write_result(&result).await {
+                                    warn!("Failed to write result to CSV: {}", e);
+                                }
+
+                                let count = csv_writer_clone.count().await;
+                                if count % 100 == 0 {
+                                    info!("Processed {} results", count);
+                                }
+
+                                debug!(
                                     "Controller received result {} for seq={} (mode={}, detections={})",
                                     count,
                                     result.sequence_id,
                                     result.timing.mode_str(),
                                     result.inference.detection_count
                                 );
-                                results_clone.lock().await.push(result);
                             }
                             None => break,
                         }
                     }
                 }
             }
-            debug!("Result collection task finished with {} results", count);
+            info!("Result collection task finished");
         });
 
         let rsu_devices: Vec<DeviceId> =
@@ -174,7 +185,6 @@ impl ControllerHarness {
         let pulse_interval = fps_to_interval(config.fixed_fps);
 
         let mut expected_results = 0u64;
-
         let frame_skip = compute_skip(config.fixed_fps);
 
         while start.elapsed().as_secs() < config.duration_seconds {
@@ -218,12 +228,13 @@ impl ControllerHarness {
         );
         sleep(Duration::from_secs(5)).await;
 
-        let final_count_now = results.lock().await.len();
+        // CHANGED: Get count from CSV writer instead of in-memory buffer
+        let final_count = csv_writer.count().await;
         info!(
             "Collected {} results out of {} pulses sent ({:.1}% success rate)",
-            final_count_now,
+            final_count,
             expected_results,
-            (final_count_now as f32 / expected_results as f32) * 100.0
+            (final_count as f32 / expected_results as f32) * 100.0
         );
 
         let shutdown = Message::Control(ControlMessage::Shutdown);
@@ -250,15 +261,15 @@ impl ControllerHarness {
 
         info!("Shutdown complete");
 
-        let locked_results = results.lock().await;
-        let final_count = locked_results.len();
-        debug!(
-            "Generating CSV with {} results for experiment {}",
-            final_count, config.experiment_id
-        );
-
-        generate_analysis_csv(&locked_results, &config.experiment_id, &config)?;
+        // CHANGED: Finalize CSV writer instead of batch writing
+        let final_count = csv_writer.finalize().await?;
         info!("Experiment {} completed with {} results saved", config.experiment_id, final_count);
         Ok(())
+    }
+}
+
+impl Clone for ConcurrentCsvWriter {
+    fn clone(&self) -> Self {
+        Self { inner: Arc::clone(&self.inner), config: self.config.clone() }
     }
 }
