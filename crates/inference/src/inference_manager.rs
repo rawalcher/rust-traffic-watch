@@ -4,12 +4,13 @@ use protocol::{FrameMessage, InferenceMessage};
 
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info};
 
 pub struct InferenceManager {
-    frame_tx: watch::Sender<Option<FrameMessage>>,
+    frame_tx: Arc<watch::Sender<Option<FrameMessage>>>,
     shutdown_tx: watch::Sender<bool>,
     inference_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -26,7 +27,7 @@ impl InferenceManager {
         let (frame_tx, _frame_rx) = watch::channel::<Option<FrameMessage>>(None);
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
 
-        Ok(Self { frame_tx, shutdown_tx, inference_task: None })
+        Ok(Self { frame_tx: Arc::new(frame_tx), shutdown_tx, inference_task: None })
     }
 
     pub fn start_inference<F>(
