@@ -4,8 +4,7 @@ pub const CONTROLLER_PORT: u16 = 9090;
 pub const ZONE_PROCESSOR_PORT: u16 = 9092;
 
 pub const CONTROLLER_ADDRESS: &str = "10.0.0.110";
-pub const ZONE_PROCESSOR_ADDRESS: &str = "localhost";
-pub const ROADSIDE_UNIT_ADDRESS: &str = "localhost";
+pub const ZONE_PROCESSOR_ADDRESS: &str = "10.0.0.178";
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
 pub const DEFAULT_DURATION_SECONDS: u64 = 10;
