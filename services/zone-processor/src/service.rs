@@ -10,7 +10,8 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tokio::time::{timeout, Duration};
+use tracing::{error, info, warn};
 
 pub async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -112,18 +113,47 @@ pub async fn run_experiment_cycle(
         }
     }
 
-    // Wait for all RSU handlers to finish before shutting down manager
     info!("Waiting for RSU handlers to complete...");
-    for handle in rsu_handles {
-        let _ = handle.await;
+
+    const RSU_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+    match timeout(RSU_SHUTDOWN_TIMEOUT, futures::future::join_all(rsu_handles)).await {
+        Ok(results) => {
+            let mut panicked = 0;
+            for (idx, result) in results.into_iter().enumerate() {
+                if let Err(e) = result {
+                    error!("RSU handler {} panicked: {:?}", idx, e);
+                    panicked += 1;
+                }
+            }
+            if panicked > 0 {
+                warn!("{} RSU handlers panicked during shutdown", panicked);
+            } else {
+                info!("All RSU handlers completed successfully");
+            }
+        }
+        Err(_) => {
+            warn!(
+                "RSU handlers did not complete within {:?}, forcing shutdown",
+                RSU_SHUTDOWN_TIMEOUT
+            );
+        }
     }
 
-    // Now we can safely unwrap the Arc and shutdown
-    let mut manager = Arc::try_unwrap(manager)
-        .map_err(|_| "Failed to unwrap Arc - still has references")?
-        .into_inner();
+    match Arc::try_unwrap(manager) {
+        Ok(mutex) => {
+            let mut manager = mutex.into_inner();
+            manager.shutdown().await;
+            info!("Inference manager shut down cleanly");
+        }
+        Err(arc) => {
+            warn!("Cannot unwrap Arc - {} strong references remain", Arc::strong_count(&arc));
 
-    manager.shutdown().await;
+            let mut manager = arc.lock().await;
+            manager.shutdown().await;
+            info!("Inference manager shut down via Arc lock");
+        }
+    }
 
     info!("Experiment cycle complete");
     Ok(true)
