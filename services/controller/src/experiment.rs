@@ -90,7 +90,7 @@ pub async fn execute(
                 models: vec!["yolov5n".into()],
                 fps_values: vec![1, 10],
                 duration: 60,
-                rsu_count: 2,
+                rsu_count: 1,
             };
             run_test_suite(quick_args, modes, harness).await
         }
