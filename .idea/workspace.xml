@@ -32,11 +32,14 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: changed address">
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: split zone_processor into two files">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/experiment.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/inference/src/persistent.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/inference/src/persistent.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/lib.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/csv_writer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/csv_writer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/service.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/Cargo.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/zone-processor/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/service.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -164,7 +167,7 @@
       <workItem from="1766347651086" duration="7340000" />
       <workItem from="1768073422907" duration="6037000" />
       <workItem from="1768085046462" duration="459000" />
-      <workItem from="1768082100490" duration="11035000" />
+      <workItem from="1768082100490" duration="13210000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -294,7 +297,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768091940449</updated>
     </task>
-    <option name="localTasksCounter" value="17" />
+    <task id="LOCAL-00017" summary="refactor: split zone_processor into two files">
+      <option name="closed" value="true" />
+      <created>1768093308798</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1768093308798</updated>
+    </task>
+    <option name="localTasksCounter" value="18" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -328,7 +339,8 @@
     <MESSAGE value="feat(cli): add id cli support to RSU and ZP" />
     <MESSAGE value="refactor(logging): prevent ort from spamming, change source_device to device_id" />
     <MESSAGE value="refactor: changed address" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: changed address" />
+    <MESSAGE value="refactor: split zone_processor into two files" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: split zone_processor into two files" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracing::info;
 
@@ -8,12 +7,12 @@ use crate::engine::OnnxDetector;
 use protocol::{current_timestamp_micros, FrameMessage, InferenceResult};
 
 pub struct PersistentOnnxDetector {
-    detector: Arc<Mutex<OnnxDetector>>,
+    detector: OnnxDetector,
     model_name: String,
     models_dir: PathBuf,
-    last_activity: Arc<Mutex<Instant>>,
+    last_activity: Instant,
     start_time: Instant,
-    inference_count: Arc<Mutex<usize>>,
+    inference_count: usize,
 }
 
 impl PersistentOnnxDetector {
@@ -23,12 +22,12 @@ impl PersistentOnnxDetector {
         let detector = OnnxDetector::new(model_path.to_str().unwrap())?;
 
         Ok(Self {
-            detector: Arc::new(Mutex::new(detector)),
+            detector,
             model_name,
             models_dir,
-            last_activity: Arc::new(Mutex::new(Instant::now())),
+            last_activity: Instant::now(),
             start_time: Instant::now(),
-            inference_count: Arc::new(Mutex::new(0)),
+            inference_count: 0,
         })
     }
 
@@ -37,11 +36,11 @@ impl PersistentOnnxDetector {
         let model_path = Self::resolve_model_path(new_model, &self.models_dir)?;
         let new_detector = OnnxDetector::new(model_path.to_str().unwrap())?;
 
-        *self.detector.lock().unwrap() = new_detector;
+        self.detector = new_detector;
         self.model_name = new_model.to_string();
 
-        *self.inference_count.lock().unwrap() = 0;
-        *self.last_activity.lock().unwrap() = Instant::now();
+        self.inference_count = 0;
+        self.last_activity = Instant::now();
         self.start_time = Instant::now();
 
         Ok(())
@@ -66,29 +65,21 @@ impl PersistentOnnxDetector {
         anyhow::bail!("Model file not found: {:?} or {:?}", exact_path, with_ext)
     }
 
-    pub fn detect_objects(&self, image_bytes: &[u8], _mode: &str) -> Result<InferenceResult> {
-        {
-            let mut last = self.last_activity.lock().unwrap();
-            *last = Instant::now();
-        }
-        {
-            let mut count = self.inference_count.lock().unwrap();
-            *count += 1;
-        }
+    pub fn detect_objects(&mut self, image_bytes: &[u8], _mode: &str) -> Result<InferenceResult> {
+        self.last_activity = Instant::now();
+        self.inference_count += 1;
 
-        let mut detector = self.detector.lock().unwrap();
-        detector.detect(image_bytes)
+        // Direct access to detector, no mutex overhead
+        self.detector.detect(image_bytes)
     }
 
     pub fn stats(&self) -> DetectorStats {
-        let count = *self.inference_count.lock().unwrap();
         let uptime = self.start_time.elapsed();
-        let last_activity = *self.last_activity.lock().unwrap();
-        let idle_time = last_activity.elapsed();
+        let idle_time = self.last_activity.elapsed();
 
         DetectorStats {
             model_name: self.model_name.clone(),
-            inference_count: count,
+            inference_count: self.inference_count,
             uptime_secs: uptime.as_secs(),
             idle_secs: idle_time.as_secs(),
         }
@@ -113,7 +104,7 @@ pub struct DetectorStats {
 
 pub fn perform_onnx_inference_with_counts(
     frame_message: &mut FrameMessage,
-    detector: &PersistentOnnxDetector,
+    detector: &mut PersistentOnnxDetector,
 ) -> Result<InferenceResult> {
     let image_bytes = &frame_message.frame.frame_data;
     frame_message.timing.inference_start = Some(current_timestamp_micros());
