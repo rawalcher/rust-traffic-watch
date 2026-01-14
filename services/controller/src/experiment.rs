@@ -160,7 +160,7 @@ async fn run_test_suite(
 
                 info!("[{}/{}] Running: {}", current, total, experiment_id);
 
-                let config = ExperimentConfig::new(
+                let mut config = ExperimentConfig::new(
                     experiment_id.clone(),
                     mode.clone(),
                     args.rsu_count,
@@ -171,6 +171,8 @@ async fn run_test_suite(
                         resolution: ImageResolutionType::FHD,
                     },
                 );
+                config.fixed_fps = *fps;
+                config.duration_seconds = args.duration;
 
                 match harness.run_controller_with_retry(config, 3).await {
                     Ok(()) => info!("Done: {}", experiment_id),
