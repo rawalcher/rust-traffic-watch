@@ -223,11 +223,11 @@ impl ControllerHarness {
         }
 
         info!(
-            "Finished sending {} pulses ({} pulses/RSU). Waiting 5 seconds for results...",
+            "Finished sending {} pulses ({} pulses/RSU). Waiting for results...",
             expected_results,
             expected_results / u64::from(config.num_roadside_units)
         );
-        sleep(Duration::from_secs(5)).await;
+        sleep(Duration::from_secs(1)).await;
 
         // CHANGED: Get count from CSV writer instead of in-memory buffer
         let final_count = csv_writer.count().await;

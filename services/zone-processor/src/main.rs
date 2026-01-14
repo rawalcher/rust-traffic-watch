@@ -49,7 +49,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
                         Ok(true) => {
                             info!("Experiment complete - ready for next one");
-                            sleep(Duration::from_secs(2)).await;
                         }
                         Ok(false) => break,
                         Err(e) => {
@@ -59,9 +58,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     }
                 }
             }
-            Err(e) => {
-                error!("Failed to connect to controller: {e}. Retrying...");
-            }
+            Err(e) => error!("Connection failed: {e}. Retrying in 2s..."),
         }
         sleep(Duration::from_secs(2)).await;
     }

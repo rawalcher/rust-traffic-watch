@@ -32,11 +32,12 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="chore: update ip for experiment">
-      <change beforePath="$PROJECT_DIR$/.idea/runConfigurations/Preprocess_Frames.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/runConfigurations/Preprocess_Frames.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="fix: pass --release flag to preprocessor">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/connection.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/connection.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/services/controller/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/experiment.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -86,6 +87,10 @@
       <facet id="rust-traffic-watch/invalid/Python facet" />
     </ignored-facets>
   </component>
+  <component name="KubernetesApiPersistence"><![CDATA[{}]]></component>
+  <component name="KubernetesApiProvider"><![CDATA[{
+  "isMigrated": true
+}]]></component>
   <component name="MacroExpansionManager">
     <option name="directoryName" value="LPTcJWXK" />
   </component>
@@ -177,7 +182,7 @@
       <workItem from="1768135455504" duration="7367000" />
       <workItem from="1768233205831" duration="6022000" />
       <workItem from="1768252699005" duration="45000" />
-      <workItem from="1768413184949" duration="1623000" />
+      <workItem from="1768413184949" duration="2980000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -387,7 +392,23 @@
       <option name="project" value="LOCAL" />
       <updated>1768413652796</updated>
     </task>
-    <option name="localTasksCounter" value="27" />
+    <task id="LOCAL-00027" summary="fix: actually use the fps and duration in suite mode">
+      <option name="closed" value="true" />
+      <created>1768414837853</created>
+      <option name="number" value="00027" />
+      <option name="presentableId" value="LOCAL-00027" />
+      <option name="project" value="LOCAL" />
+      <updated>1768414837853</updated>
+    </task>
+    <task id="LOCAL-00028" summary="fix: pass --release flag to preprocessor">
+      <option name="closed" value="true" />
+      <created>1768414902176</created>
+      <option name="number" value="00028" />
+      <option name="presentableId" value="LOCAL-00028" />
+      <option name="project" value="LOCAL" />
+      <updated>1768414902176</updated>
+    </task>
+    <option name="localTasksCounter" value="29" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -455,7 +476,9 @@
     <MESSAGE value="refactor: apply clippy suggestions" />
     <MESSAGE value="chore: update ip of roadside-unit" />
     <MESSAGE value="chore: update ip for experiment" />
-    <option name="LAST_COMMIT_MESSAGE" value="chore: update ip for experiment" />
+    <MESSAGE value="fix: actually use the fps and duration in suite mode" />
+    <MESSAGE value="fix: pass --release flag to preprocessor" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: pass --release flag to preprocessor" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

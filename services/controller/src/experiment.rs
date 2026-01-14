@@ -179,9 +179,9 @@ async fn run_test_suite(
                     Err(e) => error!("Failed {}: {}", experiment_id, e),
                 }
 
-                if current < total {
-                    sleep(Duration::from_secs(5)).await;
-                }
+                // if current < total {
+                //     sleep(Duration::from_secs(5)).await;
+                // }
             }
         }
     }

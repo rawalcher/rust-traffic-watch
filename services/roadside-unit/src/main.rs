@@ -54,8 +54,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     }
                 }
             }
-            Err(e) => error!("Connection failed: {e}. Retrying in 10s..."),
+            Err(e) => error!("Connection failed: {e}. Retrying in 2s..."),
         }
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(2)).await;
     }
 }

@@ -150,7 +150,7 @@ pub async fn wait_for_devices(expected: &[DeviceId]) {
                 info!("Waiting for {id:?} to connect...");
             }
         }
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
     info!("All devices connected");
 }
@@ -170,7 +170,7 @@ pub async fn wait_for_device_readiness(expected: &[DeviceId]) {
                 info!("Waiting for {id:?} to be ready...");
             }
         }
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
