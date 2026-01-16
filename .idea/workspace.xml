@@ -32,9 +32,8 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: bin optimizations">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/experiment.rs" afterDir="false" />
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="feat(test): add full suite">
+      <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -177,7 +176,7 @@
       <workItem from="1768233205831" duration="6022000" />
       <workItem from="1768252699005" duration="45000" />
       <workItem from="1768413184949" duration="4317000" />
-      <workItem from="1768558540590" duration="398000" />
+      <workItem from="1768558540590" duration="693000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -419,7 +418,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768416851990</updated>
     </task>
-    <option name="localTasksCounter" value="31" />
+    <task id="LOCAL-00031" summary="feat(test): add full suite">
+      <option name="closed" value="true" />
+      <created>1768558973674</created>
+      <option name="number" value="00031" />
+      <option name="presentableId" value="LOCAL-00031" />
+      <option name="project" value="LOCAL" />
+      <updated>1768558973674</updated>
+    </task>
+    <option name="localTasksCounter" value="32" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -464,7 +471,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="last config file refactoring, pinky promise" />
     <MESSAGE value="optimized imports, added run configurations for build, clippy and preprocessing frames" />
     <MESSAGE value="removed a lost newline" />
     <MESSAGE value="chore: minor refactoring for clippy" />
@@ -489,7 +495,8 @@
     <MESSAGE value="fix: pass --release flag to preprocessor" />
     <MESSAGE value="refactor: reduce sleeps" />
     <MESSAGE value="refactor: bin optimizations" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: bin optimizations" />
+    <MESSAGE value="feat(test): add full suite" />
+    <option name="LAST_COMMIT_MESSAGE" value="feat(test): add full suite" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

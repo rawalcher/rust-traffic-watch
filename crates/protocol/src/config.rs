@@ -3,8 +3,8 @@ use std::time::Duration;
 pub const CONTROLLER_PORT: u16 = 9090;
 pub const ZONE_PROCESSOR_PORT: u16 = 9092;
 
-pub const CONTROLLER_ADDRESS: &str = "10.0.0.151";
-pub const ZONE_PROCESSOR_ADDRESS: &str = "10.0.0.157";
+pub const CONTROLLER_ADDRESS: &str = "10.0.0.60";
+pub const ZONE_PROCESSOR_ADDRESS: &str = "10.0.0.30";
 // echo 120 | sudo tee /sys/devices/pwm-fan/target_pwm
 
 pub const DEFAULT_MODEL: &str = "yolov5n";
