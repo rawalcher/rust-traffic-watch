@@ -1,16 +1,18 @@
 use crate::persistent::PersistentOnnxDetector;
 use protocol::types::ExperimentConfig;
-use protocol::{FrameMessage, InferenceMessage};
+use protocol::{DeviceId, FrameMessage, InferenceMessage};
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{error, info};
 
 pub struct InferenceManager {
-    frame_tx: Arc<watch::Sender<Option<FrameMessage>>>,
+    pending_frames: Arc<Mutex<HashMap<DeviceId, FrameMessage>>>,
+    frame_notify: Arc<watch::Sender<()>>,
     shutdown_tx: watch::Sender<bool>,
     inference_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -25,10 +27,16 @@ impl InferenceManager {
 
         let _ = PersistentOnnxDetector::new(model_name, models_dir.to_path_buf())?;
 
-        let (frame_tx, _frame_rx) = watch::channel::<Option<FrameMessage>>(None);
-        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let pending_frames = Arc::new(Mutex::new(HashMap::<DeviceId, FrameMessage>::new()));
+        let (frame_notify, _) = watch::channel(());
+        let (shutdown_tx, _) = watch::channel(false);
 
-        Ok(Self { frame_tx: Arc::new(frame_tx), shutdown_tx, inference_task: None })
+        Ok(Self {
+            pending_frames,
+            frame_notify: Arc::new(frame_notify),
+            shutdown_tx,
+            inference_task: None,
+        })
     }
 
     pub fn start_inference<F>(
@@ -45,11 +53,13 @@ impl InferenceManager {
             + Send
             + 'static,
     {
-        let mut frame_rx = self.frame_tx.subscribe();
+        let pending_frames = Arc::clone(&self.pending_frames);
+        let mut frame_notify_rx = self.frame_notify.subscribe();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         let model_name = config.model_name.clone();
         let models_dir = PathBuf::from("models");
+        let num_rsus = config.num_roadside_units;
 
         let task = tokio::spawn(async move {
             info!("Starting inference worker task");
@@ -62,7 +72,53 @@ impl InferenceManager {
                 }
             };
 
+            let rsu_order: Vec<DeviceId> = (0..num_rsus).map(DeviceId::RoadsideUnit).collect();
+            let mut current_rsu_idx = 0;
+
             loop {
+                let frames_to_process: Vec<FrameMessage> = {
+                    let mut pending = pending_frames.lock().await;
+
+                    if pending.is_empty() {
+                        Vec::new()
+                    } else {
+                        let mut frames = Vec::new();
+
+                        for _ in 0..rsu_order.len() {
+                            let rsu_id = rsu_order[current_rsu_idx];
+                            current_rsu_idx = (current_rsu_idx + 1) % rsu_order.len();
+
+                            if let Some(frame) = pending.remove(&rsu_id) {
+                                frames.push(frame);
+                            }
+                        }
+
+                        frames
+                    }
+                };
+
+                for frame in frames_to_process {
+                    let seq = frame.sequence_id;
+
+                    match inference_fn(frame, &mut detector, &config) {
+                        Ok(msg) => {
+                            info!(
+                                "Inference completed: seq={} detections={} time={}ms",
+                                msg.sequence_id,
+                                msg.inference.detection_count,
+                                msg.inference.processing_time_us / 1000,
+                            );
+                            if result_tx.send(msg).is_err() {
+                                error!("Result channel closed, shutting down");
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Inference failed for {}: {}", seq, e);
+                        }
+                    }
+                }
+
                 tokio::select! {
                     _ = shutdown_rx.changed() => {
                         if *shutdown_rx.borrow() {
@@ -70,29 +126,8 @@ impl InferenceManager {
                         }
                     }
 
-                    _ = frame_rx.changed() => {
-                        let Some(frame) = frame_rx.borrow().clone() else {
-                            continue;
-                        };
-
-                        let seq = frame.sequence_id;
-
-                        match inference_fn(frame, &mut detector, &config) {
-                            Ok(msg) => {
-                                info!(
-                                    "Inference completed: seq={} detections={} time={}ms",
-                                    msg.sequence_id,
-                                    msg.inference.detection_count,
-                                    msg.inference.processing_time_us/1000,
-                                );
-                                if result_tx.send(msg).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                error!("Inference failed for {}: {}", seq, e);
-                            }
-                        }
+                    _ = frame_notify_rx.changed() => {
+                        continue;
                     }
                 }
             }
@@ -104,8 +139,17 @@ impl InferenceManager {
         self.inference_task = Some(task);
     }
 
-    pub fn update_pending_frame(&self, frame: FrameMessage) {
-        let _ = self.frame_tx.send(Some(frame));
+    pub fn update_pending_frame(&self, device_id: DeviceId, frame: FrameMessage) {
+        let pending_frames = Arc::clone(&self.pending_frames);
+        let frame_notify = Arc::clone(&self.frame_notify);
+
+        tokio::spawn(async move {
+            {
+                let mut pending = pending_frames.lock().await;
+                pending.insert(device_id, frame);
+            }
+            let _ = frame_notify.send(());
+        });
     }
 
     pub async fn shutdown(&mut self) {

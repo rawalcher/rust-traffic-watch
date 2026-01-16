@@ -115,8 +115,7 @@ async fn run_local_loop(
                                         encoding: config.encoding_spec.clone(),
                                     },
                                 };
-
-                                manager.update_pending_frame(frame_msg);
+                                manager.update_pending_frame(DeviceId::RoadsideUnit(0), frame_msg);
                             }
                             Err(e) => error!("Failed to load frame {frame_number}: {e}"),
                         }

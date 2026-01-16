@@ -103,14 +103,12 @@ impl ControllerHarness {
 
         let (inference_tx, mut inference_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
-        // CHANGED: Use streaming CSV writer instead of buffering all results
         let csv_writer = ConcurrentCsvWriter::new(&config.experiment_id, config.clone())?;
 
         let _ = self.active_sink_tx.send(Some(inference_tx.clone()));
 
         let (stop_tx, mut stop_rx) = watch::channel(false);
 
-        // CHANGED: Write results directly to CSV as they arrive
         let csv_writer_clone = csv_writer.clone();
         let result_collection_task = tokio::spawn(async move {
             loop {
@@ -123,7 +121,6 @@ impl ControllerHarness {
                             Some(mut result) => {
                                 result.timing.controller_received = Some(current_timestamp_micros());
 
-                                // Write to CSV immediately
                                 if let Err(e) = csv_writer_clone.write_result(&result).await {
                                     warn!("Failed to write result to CSV: {}", e);
                                 }
@@ -227,9 +224,21 @@ impl ControllerHarness {
             expected_results,
             expected_results / u64::from(config.num_roadside_units)
         );
-        sleep(Duration::from_secs(1)).await;
 
-        // CHANGED: Get count from CSV writer instead of in-memory buffer
+        let wait_start = Instant::now();
+        const MAX_WAIT: Duration = Duration::from_secs(5);
+
+        while wait_start.elapsed() < MAX_WAIT {
+            let current_count = csv_writer.count().await;
+
+            if current_count >= expected_results as usize {
+                info!("All {} results received!", current_count);
+                break;
+            }
+
+            sleep(Duration::from_millis(100)).await;
+        }
+
         let final_count = csv_writer.count().await;
         info!(
             "Collected {} results out of {} pulses sent ({:.1}% success rate)",

@@ -58,12 +58,16 @@ pub async fn run_experiment_cycle(
         info!("RSU connected ({}/{}): {rsu_addr}", connected_count + 1, num_roadside_units);
 
         let hello = read_message_stream(&mut rsu_stream).await?;
-        if let Message::Hello(DeviceId::RoadsideUnit(id)) = hello {
-            info!("RSU-{id:04} handshake successful");
-        } else {
-            warn!("Unexpected handshake from {rsu_addr}: {hello:?}");
-            continue;
-        }
+        let rsu_device_id = match hello {
+            Message::Hello(DeviceId::RoadsideUnit(id)) => {
+                info!("RSU-{id:04} handshake successful");
+                DeviceId::RoadsideUnit(id)
+            }
+            other => {
+                warn!("Unexpected handshake from {rsu_addr}: {other:?}");
+                continue;
+            }
+        };
 
         let manager_clone = Arc::clone(&manager);
 
@@ -72,7 +76,7 @@ pub async fn run_experiment_cycle(
             loop {
                 match read_message(&mut reader).await {
                     Ok(Message::Frame(frame)) => {
-                        manager_clone.lock().await.update_pending_frame(frame);
+                        manager_clone.lock().await.update_pending_frame(rsu_device_id, frame);
                     }
                     Ok(Message::Control(ControlMessage::Shutdown)) => break,
                     Err(_) => break,
