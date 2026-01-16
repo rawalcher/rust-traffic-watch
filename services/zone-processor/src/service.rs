@@ -76,7 +76,7 @@ pub async fn run_experiment_cycle(
             loop {
                 match read_message(&mut reader).await {
                     Ok(Message::Frame(frame)) => {
-                        manager_clone.lock().await.update_pending_frame(rsu_device_id, frame);
+                        manager_clone.lock().await.update_pending_frame(rsu_device_id, frame).await;
                     }
                     Ok(Message::Control(ControlMessage::Shutdown)) => break,
                     Err(_) => break,

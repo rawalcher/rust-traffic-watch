@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
+use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{error, info};
 
@@ -129,6 +129,10 @@ impl InferenceManager {
                     _ = frame_notify_rx.changed() => {
                         continue;
                     }
+
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                        continue;
+                    }
                 }
             }
 
@@ -139,17 +143,12 @@ impl InferenceManager {
         self.inference_task = Some(task);
     }
 
-    pub fn update_pending_frame(&self, device_id: DeviceId, frame: FrameMessage) {
-        let pending_frames = Arc::clone(&self.pending_frames);
-        let frame_notify = Arc::clone(&self.frame_notify);
-
-        tokio::spawn(async move {
-            {
-                let mut pending = pending_frames.lock().await;
-                pending.insert(device_id, frame);
-            }
-            let _ = frame_notify.send(());
-        });
+    pub async fn update_pending_frame(&self, device_id: DeviceId, frame: FrameMessage) {
+        {
+            let mut pending = self.pending_frames.lock().await;
+            pending.insert(device_id, frame);
+        }
+        let _ = self.frame_notify.send(());
     }
 
     pub async fn shutdown(&mut self) {
