@@ -27,6 +27,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
             |_| "zone_processor=info,inference=info,network=info,protocol=info,ort=warn".into(),
         ))
+        .without_time()
         .init();
 
     let args = Args::parse();

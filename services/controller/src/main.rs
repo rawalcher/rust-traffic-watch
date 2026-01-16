@@ -14,6 +14,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "controller=info,network=info,protocol=info,ort=warn".into()),
         )
+        .without_time()
         .init();
 
     let cli = Cli::parse();

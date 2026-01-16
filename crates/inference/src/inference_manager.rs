@@ -103,10 +103,10 @@ impl InferenceManager {
                     match inference_fn(frame, &mut detector, &config) {
                         Ok(msg) => {
                             info!(
-                                "Inference completed: seq={} detections={} time={}ms",
-                                msg.sequence_id,
-                                msg.inference.detection_count,
-                                msg.inference.processing_time_us / 1000,
+                                seq = msg.sequence_id,
+                                detections = msg.inference.detection_count,
+                                time_ms = msg.inference.processing_time_us / 1000,
+                                "Inference completed"
                             );
                             if result_tx.send(msg).is_err() {
                                 error!("Result channel closed, shutting down");
@@ -114,7 +114,7 @@ impl InferenceManager {
                             }
                         }
                         Err(e) => {
-                            error!("Inference failed for {}: {}", seq, e);
+                            error!(seq = seq, error = %e, "Inference failed");
                         }
                     }
                 }
