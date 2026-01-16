@@ -146,19 +146,15 @@ impl InferenceManager {
     pub async fn update_pending_frame(&self, device_id: DeviceId, frame: FrameMessage) {
         let seq = frame.sequence_id;
         tracing::debug!("update_pending_frame: device={device_id:?} seq={seq}");
-
-        let mut pending = self.pending_frames.lock().await;
-
-        if let Some(old) = pending.remove(&device_id) {
-            tracing::warn!(
-                "FRAME OVERWRITTEN: device={device_id:?} old_seq={} new_seq={seq}",
-                old.sequence_id
-            );
-            drop(old);
+        {
+            let mut pending = self.pending_frames.lock().await;
+            if let Some(old) = pending.insert(device_id, frame) {
+                tracing::warn!(
+                    "FRAME OVERWRITTEN: device={device_id:?} old_seq={} new_seq={seq}",
+                    old.sequence_id
+                );
+            }
         }
-
-        pending.insert(device_id, frame);
-        drop(pending);
         let _ = self.frame_notify.send(());
     }
 
