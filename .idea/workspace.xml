@@ -32,14 +32,15 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="feat: optimise queue system">
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="fix: did not pass deviceid so overwriting did an oopsie">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/connection.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/connection.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/framing.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/framing.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/lib.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/transport.rs" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/service.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/service.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -182,7 +183,7 @@
       <workItem from="1768233205831" duration="6022000" />
       <workItem from="1768252699005" duration="45000" />
       <workItem from="1768413184949" duration="4317000" />
-      <workItem from="1768558540590" duration="10395000" />
+      <workItem from="1768558540590" duration="12886000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -448,7 +449,23 @@
       <option name="project" value="LOCAL" />
       <updated>1768575262686</updated>
     </task>
-    <option name="localTasksCounter" value="34" />
+    <task id="LOCAL-00034" summary="fix: round robin check every 10ms anyway">
+      <option name="closed" value="true" />
+      <created>1768577247337</created>
+      <option name="number" value="00034" />
+      <option name="presentableId" value="LOCAL-00034" />
+      <option name="project" value="LOCAL" />
+      <updated>1768577247337</updated>
+    </task>
+    <task id="LOCAL-00035" summary="fix: did not pass deviceid so overwriting did an oopsie">
+      <option name="closed" value="true" />
+      <created>1768579030625</created>
+      <option name="number" value="00035" />
+      <option name="presentableId" value="LOCAL-00035" />
+      <option name="project" value="LOCAL" />
+      <updated>1768579030625</updated>
+    </task>
+    <option name="localTasksCounter" value="36" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -493,8 +510,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="chore: minor refactoring for clippy" />
-    <MESSAGE value="fix(preprocessor): refactor code to make it faster, merge files" />
     <MESSAGE value="refactor: replace jetson and pi naming with device-agnostic versions. made experiment logging more robust" />
     <MESSAGE value="refactor(networking): extract wait_for_config and wait_for_start" />
     <MESSAGE value="refactor(logging): convert us to ms" />
@@ -518,7 +533,9 @@
     <MESSAGE value="feat(test): add full suite" />
     <MESSAGE value="chore: change ip again, thanks magenta" />
     <MESSAGE value="feat: optimise queue system" />
-    <option name="LAST_COMMIT_MESSAGE" value="feat: optimise queue system" />
+    <MESSAGE value="fix: round robin check every 10ms anyway" />
+    <MESSAGE value="fix: did not pass deviceid so overwriting did an oopsie" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: did not pass deviceid so overwriting did an oopsie" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

@@ -3,14 +3,13 @@ use std::time::Duration;
 
 use crate::framing::{read_message, read_message_stream, send_message};
 use anyhow::Result;
-use log::info;
 use protocol::config::{controller_bind_address, zone_processor_bind_address};
 use protocol::types::ExperimentConfig;
 use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 pub type DeviceSender = mpsc::UnboundedSender<Message>;
 pub type DeviceReceiver = mpsc::UnboundedReceiver<Message>;
