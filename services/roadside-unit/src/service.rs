@@ -146,7 +146,7 @@ async fn handle_offload_experiment(
             Ok(stream) => {
                 let (_reader, writer) = stream.into_split();
                 let tx = spawn_writer(writer, 10);
-                tx.send(Message::Hello(DeviceId::RoadsideUnit(0))).await.ok();
+                tx.send(Message::Hello(device_id)).await.ok();
                 break tx;
             }
             Err(e) => {
