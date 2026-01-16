@@ -1,7 +1,8 @@
-use image::GenericImageView;
+use image::ImageReader;
 use protocol::types::tiers::{codec_name, res_folder};
 use protocol::types::EncodingSpec;
 use std::error::Error;
+use std::io::Cursor;
 use std::path::PathBuf;
 
 pub fn handle_frame(
@@ -25,8 +26,10 @@ pub fn handle_frame(
     }
 
     let frame_data = std::fs::read(&path)?;
-    let img = image::load_from_memory(&frame_data)?;
-    let (width, height) = img.dimensions();
+
+    let cursor = Cursor::new(&frame_data);
+    let reader = ImageReader::new(cursor).with_guessed_format()?;
+    let (width, height) = reader.into_dimensions()?;
 
     Ok((frame_data, width, height))
 }

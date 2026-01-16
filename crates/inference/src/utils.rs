@@ -41,6 +41,9 @@ pub fn letterbox_nchw(
         tensor[[0, 2, y as usize, x as usize]] = c2 as f32 / 255.0;
     }
 
+    drop(canvas);
+    drop(resized);
+
     Ok((tensor, scale, pad_x, pad_y))
 }
 

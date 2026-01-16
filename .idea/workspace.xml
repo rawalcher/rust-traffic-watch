@@ -32,13 +32,11 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: switch to tracing over log">
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: improved logging">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/controller/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/main.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/frame_loader.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/frame_loader.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -181,7 +179,7 @@
       <workItem from="1768233205831" duration="6022000" />
       <workItem from="1768252699005" duration="45000" />
       <workItem from="1768413184949" duration="4317000" />
-      <workItem from="1768558540590" duration="13276000" />
+      <workItem from="1768558540590" duration="16375000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -471,7 +469,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768579574365</updated>
     </task>
-    <option name="localTasksCounter" value="37" />
+    <task id="LOCAL-00037" summary="refactor: improved logging">
+      <option name="closed" value="true" />
+      <created>1768580178387</created>
+      <option name="number" value="00037" />
+      <option name="presentableId" value="LOCAL-00037" />
+      <option name="project" value="LOCAL" />
+      <updated>1768580178387</updated>
+    </task>
+    <option name="localTasksCounter" value="38" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -516,7 +522,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="refactor(networking): extract wait_for_config and wait_for_start" />
     <MESSAGE value="refactor(logging): convert us to ms" />
     <MESSAGE value="chore: update readme.md" />
     <MESSAGE value="feat(zone-processor): allow multiple rsus to connect at the same time" />
@@ -541,7 +546,8 @@
     <MESSAGE value="fix: round robin check every 10ms anyway" />
     <MESSAGE value="fix: did not pass deviceid so overwriting did an oopsie" />
     <MESSAGE value="refactor: switch to tracing over log" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: switch to tracing over log" />
+    <MESSAGE value="refactor: improved logging" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: improved logging" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
