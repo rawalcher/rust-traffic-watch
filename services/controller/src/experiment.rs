@@ -38,6 +38,9 @@ pub enum RunMode {
 
     /// Advanced high-stress suite: all models, all tiers, long duration
     Advanced,
+
+    /// Full comprehensive suite: all models, all codecs, all tiers, all resolutions, 3 RSUs
+    Full,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -108,6 +111,7 @@ pub async fn execute(
             };
             run_test_suite(advanced_args, modes, harness).await
         }
+        RunMode::Full => run_full_comprehensive_suite(modes, harness).await,
     }
 }
 
@@ -178,12 +182,151 @@ async fn run_test_suite(
                     Ok(()) => info!("Done: {}", experiment_id),
                     Err(e) => error!("Failed {}: {}", experiment_id, e),
                 }
-
-                // if current < total {
-                //     sleep(Duration::from_secs(5)).await;
-                // }
             }
         }
     }
+    Ok(())
+}
+
+async fn run_full_comprehensive_suite(
+    modes: Vec<ExperimentMode>,
+    harness: &ControllerHarness,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let models = vec!["yolov5n".to_string(), "yolov5s".to_string(), "yolov5m".to_string()];
+
+    let fps_values = vec![1, 5, 10, 15];
+
+    let codecs = vec![
+        ImageCodecKind::JpgLossy,
+        ImageCodecKind::PngLossless,
+        ImageCodecKind::WebpLossy,
+        ImageCodecKind::WebpLossless,
+    ];
+
+    let tiers = vec![Tier::T1, Tier::T2, Tier::T3];
+
+    let resolutions =
+        vec![ImageResolutionType::FHD, ImageResolutionType::HD, ImageResolutionType::Letterbox];
+
+    let duration = 30;
+    let rsu_count = 3;
+
+    let total = models.len()
+        * fps_values.len()
+        * codecs.len()
+        * tiers.len()
+        * resolutions.len()
+        * modes.len();
+
+    info!("========================================");
+    info!("FULL COMPREHENSIVE SUITE (SMOKE TEST)");
+    info!("========================================");
+    info!("Models: {}", models.len());
+    info!("FPS values: {}", fps_values.len());
+    info!("Codecs: {}", codecs.len());
+    info!("Tiers: {}", tiers.len());
+    info!("Resolutions: {}", resolutions.len());
+    info!("Modes: {}", modes.len());
+    info!("RSU count: {}", rsu_count);
+    info!("Duration per experiment: {}s (smoke test)", duration);
+    info!("----------------------------------------");
+    info!("TOTAL EXPERIMENTS: {}", total);
+    info!(
+        "ESTIMATED TIME: {:.1} hours ({:.0} minutes)",
+        (total as f64 * duration as f64) / 3600.0,
+        (total as f64 * duration as f64) / 60.0
+    );
+    info!("========================================");
+
+    let mut current = 0;
+    let start_time = std::time::Instant::now();
+
+    for model in &models {
+        for fps in &fps_values {
+            for codec in &codecs {
+                for tier in &tiers {
+                    for resolution in &resolutions {
+                        for mode in &modes {
+                            current += 1;
+
+                            let experiment_id = format!(
+                                "{}_{}_{:?}_{:?}_{:?}_{}fps_{}rsu_full",
+                                mode, model, codec, tier, resolution, fps, rsu_count
+                            );
+
+                            let elapsed = start_time.elapsed().as_secs();
+                            let rate = if current > 1 {
+                                elapsed as f64 / (current - 1) as f64
+                            } else {
+                                0.0
+                            };
+                            let remaining_experiments = total - current;
+                            let eta_seconds = (remaining_experiments as f64 * rate) as u64;
+
+                            info!("========================================");
+                            info!("[{}/{}] Running: {}", current, total, experiment_id);
+                            info!(
+                                "Progress: {:.1}% | Elapsed: {}h {}m | ETA: {}h {}m",
+                                (current as f64 / total as f64) * 100.0,
+                                elapsed / 3600,
+                                (elapsed % 3600) / 60,
+                                eta_seconds / 3600,
+                                (eta_seconds % 3600) / 60
+                            );
+                            info!("========================================");
+
+                            let encoding_spec = EncodingSpec {
+                                codec: *codec,
+                                tier: *tier,
+                                resolution: *resolution,
+                            };
+
+                            let mut config = ExperimentConfig::new(
+                                experiment_id.clone(),
+                                mode.clone(),
+                                rsu_count,
+                                model.clone(),
+                                encoding_spec,
+                            );
+                            config.fixed_fps = *fps;
+                            config.duration_seconds = duration;
+
+                            match harness.run_controller_with_retry(config, 3).await {
+                                Ok(()) => {
+                                    info!("Completed: {}", experiment_id);
+                                }
+                                Err(e) => {
+                                    error!("Failed {}: {}", experiment_id, e);
+                                    error!("Continuing to next experiment...");
+                                }
+                            }
+
+                            if current < total {
+                                sleep(Duration::from_millis(100)).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let total_time = start_time.elapsed();
+    info!("========================================");
+    info!("FULL SUITE SMOKE TEST COMPLETE");
+    info!("========================================");
+    info!("Total experiments: {}", total);
+    info!(
+        "Total time: {}h {}m {}s",
+        total_time.as_secs() / 3600,
+        (total_time.as_secs() % 3600) / 60,
+        total_time.as_secs() % 60
+    );
+    info!("Average per experiment: {:.1}s", total_time.as_secs() as f64 / total as f64);
+    info!("========================================");
+    info!("NOTE: This was a 30-second smoke test.");
+    info!("Review results to select configurations for full production runs.");
+    info!("========================================");
+
     Ok(())
 }

@@ -32,9 +32,9 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: reduce sleeps">
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: bin optimizations">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/experiment.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/experiment.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -84,10 +84,10 @@
       <facet id="rust-traffic-watch/invalid/Python facet" />
     </ignored-facets>
   </component>
-  <component name="KubernetesApiPersistence"><![CDATA[{}]]></component>
-  <component name="KubernetesApiProvider"><![CDATA[{
-  "isMigrated": true
-}]]></component>
+  <component name="KubernetesApiPersistence">{}</component>
+  <component name="KubernetesApiProvider">{
+  &quot;isMigrated&quot;: true
+}</component>
   <component name="MacroExpansionManager">
     <option name="directoryName" value="LPTcJWXK" />
   </component>
@@ -148,9 +148,6 @@
       <recent name="C:\Users\Raphael\RustroverProjects\rust-traffic-watch\crates\protocol" />
     </key>
   </component>
-  <component name="RsExternalLinterProjectSettings">
-    <option name="tool" value="Clippy" />
-  </component>
   <component name="RunManager" selected="Cargo.Build">
     <list>
       <item itemvalue="Cargo.Build" />
@@ -179,7 +176,8 @@
       <workItem from="1768135455504" duration="7367000" />
       <workItem from="1768233205831" duration="6022000" />
       <workItem from="1768252699005" duration="45000" />
-      <workItem from="1768413184949" duration="3258000" />
+      <workItem from="1768413184949" duration="4317000" />
+      <workItem from="1768558540590" duration="398000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -413,7 +411,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768416643560</updated>
     </task>
-    <option name="localTasksCounter" value="30" />
+    <task id="LOCAL-00030" summary="refactor: bin optimizations">
+      <option name="closed" value="true" />
+      <created>1768416851990</created>
+      <option name="number" value="00030" />
+      <option name="presentableId" value="LOCAL-00030" />
+      <option name="project" value="LOCAL" />
+      <updated>1768416851990</updated>
+    </task>
+    <option name="localTasksCounter" value="31" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -458,7 +464,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="streamlined constants" />
     <MESSAGE value="last config file refactoring, pinky promise" />
     <MESSAGE value="optimized imports, added run configurations for build, clippy and preprocessing frames" />
     <MESSAGE value="removed a lost newline" />
@@ -483,7 +488,8 @@
     <MESSAGE value="fix: actually use the fps and duration in suite mode" />
     <MESSAGE value="fix: pass --release flag to preprocessor" />
     <MESSAGE value="refactor: reduce sleeps" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: reduce sleeps" />
+    <MESSAGE value="refactor: bin optimizations" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: bin optimizations" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
