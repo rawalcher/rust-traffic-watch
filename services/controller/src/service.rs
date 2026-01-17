@@ -254,6 +254,12 @@ impl ControllerHarness {
             }
         }
 
+        info!("Waiting for devices to disconnect...");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        connection::force_disconnect_devices(&required_devices).await;
+        info!("All devices disconnected");
+
         let _ = stop_tx.send(true);
         let _ = self.active_sink_tx.send(None);
         drop(inference_tx);

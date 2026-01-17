@@ -32,11 +32,17 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: improved logging">
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="fix: revert update_pending_frame changes">
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/inference/src/inference_manager.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/crates/network/src/connection.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/network/src/connection.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/frame_loader.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/frame_loader.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/service.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/roadside-unit/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/roadside-unit/src/service.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/service.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -110,40 +116,40 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Cargo.Build.executor": "Run",
-    "Cargo.Clippy.executor": "Run",
-    "Cargo.Preprocess Frames.executor": "Run",
-    "Cargo.Run.executor": "Run",
-    "NIXITCH_NIXPKGS_CONFIG": "/etc/nix/nixpkgs-config.nix",
-    "NIXITCH_NIX_CONF_DIR": "",
-    "NIXITCH_NIX_OTHER_STORES": "",
-    "NIXITCH_NIX_PATH": "nixpkgs=flake:nixpkgs:/nix/var/nix/profiles/per-user/root/channels",
-    "NIXITCH_NIX_PROFILES": "/run/current-system/sw /nix/var/nix/profiles/default /etc/profiles/per-user/rawalcher /home/rawalcher/.local/state/nix/profile /nix/profile /home/rawalcher/.nix-profile",
-    "NIXITCH_NIX_REMOTE": "",
-    "NIXITCH_NIX_USER_PROFILE_DIR": "/nix/var/nix/profiles/per-user/rawalcher",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.rust.reset.selective.auto.import": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "code.cleanup.on.save": "true",
-    "git-widget-placeholder": "main",
-    "last_opened_file_path": "/home/rawalcher/repos/rust-traffic-watch",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true",
-    "org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon": "",
-    "rearrange.code.on.save": "true",
-    "settings.editor.selected.configurable": "preferences.keymap",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Cargo.Build.executor&quot;: &quot;Run&quot;,
+    &quot;Cargo.Clippy.executor&quot;: &quot;Run&quot;,
+    &quot;Cargo.Preprocess Frames.executor&quot;: &quot;Run&quot;,
+    &quot;Cargo.Run.executor&quot;: &quot;Run&quot;,
+    &quot;NIXITCH_NIXPKGS_CONFIG&quot;: &quot;/etc/nix/nixpkgs-config.nix&quot;,
+    &quot;NIXITCH_NIX_CONF_DIR&quot;: &quot;&quot;,
+    &quot;NIXITCH_NIX_OTHER_STORES&quot;: &quot;&quot;,
+    &quot;NIXITCH_NIX_PATH&quot;: &quot;nixpkgs=flake:nixpkgs:/nix/var/nix/profiles/per-user/root/channels&quot;,
+    &quot;NIXITCH_NIX_PROFILES&quot;: &quot;/run/current-system/sw /nix/var/nix/profiles/default /etc/profiles/per-user/rawalcher /home/rawalcher/.local/state/nix/profile /nix/profile /home/rawalcher/.nix-profile&quot;,
+    &quot;NIXITCH_NIX_REMOTE&quot;: &quot;&quot;,
+    &quot;NIXITCH_NIX_USER_PROFILE_DIR&quot;: &quot;/nix/var/nix/profiles/per-user/rawalcher&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.rust.reset.selective.auto.import&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;code.cleanup.on.save&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/rawalcher/repos/rust-traffic-watch&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;org.rust.cargo.project.model.PROJECT_DISCOVERY&quot;: &quot;true&quot;,
+    &quot;org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon&quot;: &quot;&quot;,
+    &quot;rearrange.code.on.save&quot;: &quot;true&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;project.propVCSSupport.DirectoryMappings&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="C:\Users\Raphael\RustroverProjects\rust-traffic-watch\crates\protocol\src" />
@@ -179,7 +185,8 @@
       <workItem from="1768233205831" duration="6022000" />
       <workItem from="1768252699005" duration="45000" />
       <workItem from="1768413184949" duration="4317000" />
-      <workItem from="1768558540590" duration="16375000" />
+      <workItem from="1768558540590" duration="17345000" />
+      <workItem from="1768601801642" duration="3495000" />
     </task>
     <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
       <option name="closed" value="true" />
@@ -477,7 +484,23 @@
       <option name="project" value="LOCAL" />
       <updated>1768580178387</updated>
     </task>
-    <option name="localTasksCounter" value="38" />
+    <task id="LOCAL-00038" summary="fix: several memory optimizations to hopefully fix the leak...">
+      <option name="closed" value="true" />
+      <created>1768597661989</created>
+      <option name="number" value="00038" />
+      <option name="presentableId" value="LOCAL-00038" />
+      <option name="project" value="LOCAL" />
+      <updated>1768597661989</updated>
+    </task>
+    <task id="LOCAL-00039" summary="fix: revert update_pending_frame changes">
+      <option name="closed" value="true" />
+      <created>1768601910851</created>
+      <option name="number" value="00039" />
+      <option name="presentableId" value="LOCAL-00039" />
+      <option name="project" value="LOCAL" />
+      <updated>1768601910852</updated>
+    </task>
+    <option name="localTasksCounter" value="40" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -503,27 +526,13 @@
       <map>
         <entry key="MAIN">
           <value>
-            <State>
-              <option name="FILTERS">
-                <map>
-                  <entry key="structure">
-                    <value>
-                      <list>
-                        <option value="file:$PROJECT_DIR$/crates/protocol/src/config.rs" />
-                      </list>
-                    </value>
-                  </entry>
-                </map>
-              </option>
-            </State>
+            <State />
           </value>
         </entry>
       </map>
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="refactor(logging): convert us to ms" />
-    <MESSAGE value="chore: update readme.md" />
     <MESSAGE value="feat(zone-processor): allow multiple rsus to connect at the same time" />
     <MESSAGE value="feat(cli): reworked argument passing by using CLAP" />
     <MESSAGE value="feat(cli): add id cli support to RSU and ZP" />
@@ -547,7 +556,9 @@
     <MESSAGE value="fix: did not pass deviceid so overwriting did an oopsie" />
     <MESSAGE value="refactor: switch to tracing over log" />
     <MESSAGE value="refactor: improved logging" />
-    <option name="LAST_COMMIT_MESSAGE" value="refactor: improved logging" />
+    <MESSAGE value="fix: several memory optimizations to hopefully fix the leak..." />
+    <MESSAGE value="fix: revert update_pending_frame changes" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: revert update_pending_frame changes" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

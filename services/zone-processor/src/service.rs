@@ -11,7 +11,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub async fn run_experiment_cycle(
     ctrl_reader: &mut OwnedReadHalf,
@@ -36,6 +36,7 @@ pub async fn run_experiment_cycle(
         "Waiting for {num_roadside_units} RSUs to connect on {}...",
         zone_processor_bind_address()
     );
+
     let listener = TcpListener::bind(zone_processor_bind_address()).await?;
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
@@ -78,12 +79,18 @@ pub async fn run_experiment_cycle(
                     Ok(Message::Frame(frame)) => {
                         manager_clone.lock().await.update_pending_frame(rsu_device_id, frame).await;
                     }
-                    Ok(Message::Control(ControlMessage::Shutdown)) => break,
-                    Err(_) => break,
+                    Ok(Message::Control(ControlMessage::Shutdown)) => {
+                        info!("RSU {} sent shutdown", rsu_device_id);
+                        break;
+                    }
+                    Err(e) => {
+                        info!("RSU {} disconnected: {}", rsu_device_id, e);
+                        break;
+                    }
                     _ => {}
                 }
             }
-            info!("RSU handler for {rsu_addr} terminated");
+            debug!("RSU handler for {} terminated", rsu_device_id);
         });
 
         rsu_handles.push(handle);
@@ -91,7 +98,7 @@ pub async fn run_experiment_cycle(
     }
 
     drop(listener);
-    info!("All RSUs connected. Notifying controller.");
+    info!("All RSUs connected. Closed listener. Notifying controller.");
 
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
     wait_for_start(ctrl_reader).await?;
@@ -119,7 +126,7 @@ pub async fn run_experiment_cycle(
 
     info!("Waiting for RSU handlers to complete...");
 
-    const RSU_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+    const RSU_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
     match timeout(RSU_SHUTDOWN_TIMEOUT, futures::future::join_all(rsu_handles)).await {
         Ok(results) => {
@@ -159,6 +166,6 @@ pub async fn run_experiment_cycle(
         }
     }
 
-    info!("Experiment cycle complete");
+    info!("Experiment cycle complete - all RSU connections closed");
     Ok(true)
 }

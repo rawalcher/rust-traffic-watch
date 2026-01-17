@@ -1,4 +1,4 @@
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::error::Error;
 
 use tokio::net::tcp::OwnedReadHalf;
@@ -141,20 +141,24 @@ async fn handle_offload_experiment(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Connecting to Zone Processor at {}", zone_processor_address());
 
-    let zp_tx = loop {
+    let zp_stream = loop {
         match tokio::net::TcpStream::connect(zone_processor_address()).await {
             Ok(stream) => {
-                let (_reader, writer) = stream.into_split();
-                let tx = spawn_writer(writer, 10);
-                tx.send(Message::Hello(device_id)).await.ok();
-                break tx;
+                info!("Connected to Zone Processor");
+                break stream;
             }
             Err(e) => {
-                warn!("Zone Processor connection failed: {e}, retrying...");
+                warn!("Zone Processor connection failed: {e}, retrying in 2s...");
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
     };
+
+    let (_zp_reader, zp_writer) = zp_stream.into_split();
+    let zp_tx = spawn_writer(zp_writer, 10);
+
+    zp_tx.send(Message::Hello(device_id)).await.ok();
+    info!("Sent hello to Zone Processor");
 
     ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
     wait_for_start(ctrl_reader).await?;
@@ -181,6 +185,7 @@ async fn handle_offload_experiment(
         }
     }
 
+    debug!("ZP connection closed");
     Ok(())
 }
 

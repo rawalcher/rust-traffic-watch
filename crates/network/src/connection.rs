@@ -117,7 +117,8 @@ pub async fn handle_device_connection(stream: TcpStream, role: Role) -> Result<(
 
     let _ = tokio::try_join!(write_task, read_task);
     DEVICES.lock().await.remove(&device_id);
-    debug!("Removed {device_id:?} from DEVICES");
+    READY_DEVICES.lock().await.remove(&device_id);
+    debug!("Removed {device_id:?} from DEVICES and READY_DEVICES");
     Ok(())
 }
 
@@ -175,6 +176,17 @@ pub async fn wait_for_device_readiness(expected: &[DeviceId]) {
 
 pub async fn clear_ready_devices() {
     READY_DEVICES.lock().await.clear();
+}
+
+pub async fn force_disconnect_devices(device_ids: &[DeviceId]) {
+    let mut devices = DEVICES.lock().await;
+    let mut ready = READY_DEVICES.lock().await;
+
+    for id in device_ids {
+        devices.remove(id);
+        ready.remove(id);
+        debug!("Force disconnected {id:?}");
+    }
 }
 
 /// # Errors

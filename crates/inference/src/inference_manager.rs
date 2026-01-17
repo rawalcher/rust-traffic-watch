@@ -166,6 +166,8 @@ impl InferenceManager {
             let _ = task.await;
         }
 
+        self.pending_frames.lock().await.clear();
+
         info!("Inference manager shut down.");
     }
 }

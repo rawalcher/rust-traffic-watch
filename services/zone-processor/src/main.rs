@@ -46,18 +46,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 ctrl_tx.send(Message::Hello(device_id)).await.ok();
                 info!("Sent hello to controller");
 
-                loop {
-                    match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
-                        Ok(true) => {
-                            info!("Experiment complete - ready for next one");
-                        }
-                        Ok(false) => break,
-                        Err(e) => {
-                            error!("Experiment error: {e}");
-                            break;
-                        }
+                match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone()).await {
+                    Ok(true) => {
+                        info!("Experiment complete - reconnecting for next one");
+                    }
+                    Ok(false) => {
+                        info!("Shutdown received - reconnecting");
+                    }
+                    Err(e) => {
+                        error!("Experiment error: {e}");
                     }
                 }
+
+                sleep(Duration::from_millis(500)).await;
             }
             Err(e) => error!("Connection failed: {e}. Retrying in 2s..."),
         }
