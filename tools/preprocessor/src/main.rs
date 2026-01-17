@@ -1,3 +1,8 @@
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::similar_names)]
+
 use anyhow::{Context, Result};
 use protocol::types::{
     tiers::{codec_name, res_folder}, ImageCodecKind, ImageResolutionType,
@@ -31,7 +36,7 @@ impl ConversionStats {
     fn report_success(&self) {
         let current = self.succeeded.fetch_add(1, Ordering::Relaxed) + 1;
         if current.is_multiple_of(50) || current == self.total {
-            let percent = (current as f32 / self.total as f32) * 100.0;
+            let percent = (current as f64 / self.total as f64) * 100.0;
             info!("Progress: {}/{} ({:.1}%)", current, self.total, percent);
         }
     }

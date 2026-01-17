@@ -1,16 +1,23 @@
-use anyhow::Result;
 use image::{imageops, DynamicImage, GenericImageView, Rgb};
 use ndarray::{s, Array, ArrayView3, Axis};
 use protocol::types::Detection;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+pub type Tensor4D = Array<f32, ndarray::Dim<[usize; 4]>>;
+pub type LetterboxResult = (Tensor4D, f32, f32, f32);
+
+pub struct RescaleParams {
+    pub scale: f32,
+    pub pad_x: f32,
+    pub pad_y: f32,
+    pub orig_width: u32,
+    pub orig_height: u32,
+}
+
 /// Resize image to square with padding, return normalized tensor and transform params
-pub fn letterbox_nchw(
-    img: &DynamicImage,
-    target_size: u32,
-    swap_bgr: bool,
-) -> Result<(Array<f32, ndarray::Dim<[usize; 4]>>, f32, f32, f32)> {
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn letterbox_nchw(img: &DynamicImage, target_size: u32, swap_bgr: bool) -> LetterboxResult {
     let (orig_width, orig_height) = img.dimensions();
 
     // Calculate scale to fit image in target_size square
@@ -33,18 +40,17 @@ pub fn letterbox_nchw(
     let mut tensor = Array::zeros((1, 3, size, size));
 
     for (x, y, pixel) in canvas.enumerate_pixels() {
-        let [r, g, b] = pixel.0;
+        let r = pixel.0[0];
+        let g = pixel.0[1];
+        let b = pixel.0[2];
         let (c0, c1, c2) = if swap_bgr { (b, g, r) } else { (r, g, b) };
 
-        tensor[[0, 0, y as usize, x as usize]] = c0 as f32 / 255.0;
-        tensor[[0, 1, y as usize, x as usize]] = c1 as f32 / 255.0;
-        tensor[[0, 2, y as usize, x as usize]] = c2 as f32 / 255.0;
+        tensor[[0, 0, y as usize, x as usize]] = f32::from(c0) / 255.0;
+        tensor[[0, 1, y as usize, x as usize]] = f32::from(c1) / 255.0;
+        tensor[[0, 2, y as usize, x as usize]] = f32::from(c2) / 255.0;
     }
 
-    drop(canvas);
-    drop(resized);
-
-    Ok((tensor, scale, pad_x, pad_y))
+    (tensor, scale, pad_x, pad_y)
 }
 
 /// Parse YOLO model output into bounding boxes, scores, and class IDs
@@ -54,37 +60,32 @@ pub fn parse_yolo_output(
     iou_threshold: f32,
     allowed_class_ids: &[i64],
 ) -> (Vec<[f32; 4]>, Vec<f32>, Vec<i64>) {
-    // Get first batch and ensure correct orientation
     let predictions = output.index_axis(Axis(0), 0);
     let shape = predictions.shape();
-    let predictions =
+    let preds =
         if shape[0] < shape[1] { predictions.t().to_owned() } else { predictions.to_owned() };
 
     let mut boxes = Vec::new();
     let mut scores = Vec::new();
     let mut class_ids = Vec::new();
 
-    // Filter predictions by confidence and allowed classes
-    for prediction in predictions.outer_iter() {
-        if prediction.len() < 5 {
+    for prediction in preds.outer_iter() {
+        if prediction.len() < 5 || prediction[4] < confidence_threshold {
             continue;
         }
 
         let objectness = prediction[4];
-        if objectness < confidence_threshold {
-            continue;
-        }
-
-        // Find best class
         let class_probs = prediction.slice(s![5..]);
-        let (class_idx, class_prob) = find_max(&class_probs);
+        let (top_index, class_prob) = find_max(&class_probs);
         let confidence = objectness * class_prob;
 
         if confidence < confidence_threshold {
             continue;
         }
 
-        let class_id = class_idx as i64;
+        #[allow(clippy::cast_possible_wrap)]
+        let class_id = top_index as i64;
+
         if !allowed_class_ids.contains(&class_id) {
             continue;
         }
@@ -95,12 +96,12 @@ pub fn parse_yolo_output(
         let width = prediction[2];
         let height = prediction[3];
 
-        let x1 = center_x - width / 2.0;
-        let y1 = center_y - height / 2.0;
-        let x2 = center_x + width / 2.0;
-        let y2 = center_y + height / 2.0;
-
-        boxes.push([x1, y1, x2, y2]);
+        boxes.push([
+            center_x - width / 2.0,
+            center_y - height / 2.0,
+            center_x + width / 2.0,
+            center_y + height / 2.0,
+        ]);
         scores.push(confidence);
         class_ids.push(class_id);
     }
@@ -116,16 +117,13 @@ pub fn parse_yolo_output(
 }
 
 /// Convert model-space detections back to original image coordinates
+#[allow(clippy::cast_precision_loss)]
 pub fn rescale_detections(
     boxes: &[[f32; 4]],
     scores: &[f32],
     class_ids: &[i64],
     id_to_name: &HashMap<i64, &'static str>,
-    scale: f32,
-    pad_x: f32,
-    pad_y: f32,
-    orig_width: u32,
-    orig_height: u32,
+    params: &RescaleParams,
 ) -> Vec<Detection> {
     boxes
         .iter()
@@ -134,15 +132,14 @@ pub fn rescale_detections(
         .map(|((&[x1, y1, x2, y2], &score), &class_id)| {
             let class_name = id_to_name.get(&class_id).copied().unwrap_or("unknown");
 
-            // Remove padding and scale back to original size
-            let x1 = ((x1 - pad_x) / scale).clamp(0.0, orig_width as f32);
-            let y1 = ((y1 - pad_y) / scale).clamp(0.0, orig_height as f32);
-            let x2 = ((x2 - pad_x) / scale).clamp(0.0, orig_width as f32);
-            let y2 = ((y2 - pad_y) / scale).clamp(0.0, orig_height as f32);
+            let x1 = ((x1 - params.pad_x) / params.scale).clamp(0.0, params.orig_width as f32);
+            let y1 = ((y1 - params.pad_y) / params.scale).clamp(0.0, params.orig_height as f32);
+            let x2 = ((x2 - params.pad_x) / params.scale).clamp(0.0, params.orig_width as f32);
+            let y2 = ((y2 - params.pad_y) / params.scale).clamp(0.0, params.orig_height as f32);
 
             Detection {
                 class: class_name.to_string(),
-                bbox: [x1, y1, x2 - x1, y2 - y1], // Convert to [x, y, width, height]
+                bbox: [x1, y1, x2 - x1, y2 - y1],
                 confidence: score,
             }
         })
@@ -177,16 +174,13 @@ fn non_maximum_suppression(boxes: &[[f32; 4]], scores: &[f32], iou_threshold: f3
         }
 
         keep.push(current_idx);
-        let current_box = boxes[current_idx];
 
-        // Suppress overlapping boxes
         for &candidate_idx in &indices {
             if suppressed[candidate_idx] || candidate_idx == current_idx {
                 continue;
             }
 
-            let iou = calculate_iou(current_box, boxes[candidate_idx]);
-            if iou > iou_threshold {
+            if calculate_iou(boxes[current_idx], boxes[candidate_idx]) > iou_threshold {
                 suppressed[candidate_idx] = true;
             }
         }

@@ -59,6 +59,7 @@ fn print_summary(detections: &[Detection]) {
     info!("{:-^40}\n", "");
 }
 
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn draw_detections(img: &mut DynamicImage, detections: &[Detection]) -> Result<()> {
     let font =
         Font::try_from_bytes(FONT_DATA).ok_or_else(|| anyhow::anyhow!("Failed to load font"))?;
@@ -73,7 +74,7 @@ fn draw_detections(img: &mut DynamicImage, detections: &[Detection]) -> Result<(
             det.bbox[3].max(1.0) as u32,
         );
 
-        let seed = det.class.bytes().map(|b| b as u32).sum::<u32>();
+        let seed = det.class.bytes().map(u32::from).sum::<u32>();
         let color = Rgba([((seed * 50) % 255) as u8, ((seed * 100) % 255) as u8, 200, 255]);
 
         draw_hollow_rect_mut(img, Rect::at(x, y).of_size(w, h), color);

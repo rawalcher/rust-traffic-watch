@@ -127,11 +127,9 @@ impl InferenceManager {
                     }
 
                     _ = frame_notify_rx.changed() => {
-                        continue;
                     }
 
-                    _ = tokio::time::sleep(Duration::from_millis(10)) => {
-                        continue;
+                    () = tokio::time::sleep(Duration::from_millis(10)) => {
                     }
                 }
             }

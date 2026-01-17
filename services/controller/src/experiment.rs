@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use std::error::Error;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
 use tracing::{error, info};
 
 use protocol::config::{
@@ -73,237 +73,125 @@ pub struct SuiteArgs {
     pub rsu_count: u8,
 }
 
+struct SuiteDefinition {
+    name: String,
+    models: Vec<String>,
+    fps_values: Vec<u64>,
+    codecs: Vec<ImageCodecKind>,
+    tiers: Vec<Tier>,
+    resolutions: Vec<ImageResolutionType>,
+    modes: Vec<ExperimentMode>,
+    duration: u64,
+    rsu_count: u8,
+}
+
 pub async fn execute(
     cli: Cli,
     harness: &ControllerHarness,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let modes = if cli.local_only {
-        vec![ExperimentMode::Local]
-    } else if cli.remote_only {
-        vec![ExperimentMode::Offload]
-    } else {
-        vec![ExperimentMode::Local, ExperimentMode::Offload]
+    let modes = match (cli.local_only, cli.remote_only) {
+        (true, _) => vec![ExperimentMode::Local],
+        (_, true) => vec![ExperimentMode::Offload],
+        _ => vec![ExperimentMode::Local, ExperimentMode::Offload],
     };
 
-    match cli.command {
-        RunMode::Single(args) => run_single_experiment(args, modes, harness).await,
-        RunMode::Suite(args) => run_test_suite(args, modes, harness).await,
-        RunMode::Quick => {
-            let quick_args = SuiteArgs {
-                models: vec!["yolov5n".into()],
-                fps_values: vec![1, 10],
-                duration: 30,
-                rsu_count: 2,
-            };
-            run_test_suite(quick_args, modes, harness).await
-        }
-        RunMode::Advanced => {
-            let advanced_args = SuiteArgs {
-                models: vec![
-                    "yolov5n".into(),
-                    "yolov5s".into(),
-                    "yolov5m".into(),
-                    "yolov5l".into(),
-                ],
-                fps_values: vec![1, 5, 10, 20, 30],
-                duration: 600,
-                rsu_count: 2,
-            };
-            run_test_suite(advanced_args, modes, harness).await
-        }
-        RunMode::Full => run_full_comprehensive_suite(modes, harness).await,
-    }
-}
-
-async fn run_single_experiment(
-    args: SingleArgs,
-    modes: Vec<ExperimentMode>,
-    harness: &ControllerHarness,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let encoding = EncodingSpec {
-        codec: ImageCodecKind::JpgLossy,
-        tier: Tier::T2,
-        resolution: ImageResolutionType::FHD,
+    let def = match cli.command {
+        RunMode::Single(a) => SuiteDefinition {
+            name: "single".into(),
+            models: vec![a.model],
+            fps_values: vec![a.fps],
+            codecs: vec![ImageCodecKind::JpgLossy],
+            tiers: vec![Tier::T2],
+            resolutions: vec![ImageResolutionType::FHD],
+            modes,
+            duration: a.duration,
+            rsu_count: a.rsu_count,
+        },
+        RunMode::Quick => SuiteDefinition {
+            name: "quick".into(),
+            models: vec!["yolov5n".into()],
+            fps_values: vec![1, 10],
+            codecs: vec![ImageCodecKind::JpgLossy],
+            tiers: vec![Tier::T2],
+            resolutions: vec![ImageResolutionType::FHD],
+            modes,
+            duration: 10,
+            rsu_count: 2,
+        },
+        RunMode::Suite(a) => SuiteDefinition {
+            name: "suite".into(),
+            models: a.models,
+            fps_values: a.fps_values,
+            codecs: vec![ImageCodecKind::JpgLossy],
+            tiers: vec![Tier::T2],
+            resolutions: vec![ImageResolutionType::FHD],
+            modes,
+            duration: a.duration,
+            rsu_count: a.rsu_count,
+        },
+        RunMode::Full | RunMode::Advanced => SuiteDefinition {
+            name: "full".into(),
+            models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
+            fps_values: vec![1, 5, 10, 20],
+            codecs: vec![
+                ImageCodecKind::JpgLossy,
+                ImageCodecKind::WebpLossy,
+                ImageCodecKind::PngLossless,
+            ],
+            tiers: vec![Tier::T1, Tier::T2, Tier::T3],
+            resolutions: vec![ImageResolutionType::FHD, ImageResolutionType::HD],
+            modes,
+            duration: 30,
+            rsu_count: 3,
+        },
     };
 
-    for mode in modes {
-        let experiment_id = format!("{}_{}_{}fps_single", mode, args.model, args.fps);
-
-        let mut config = ExperimentConfig::new(
-            experiment_id.clone(),
-            mode,
-            args.rsu_count,
-            args.model.clone(),
-            encoding.clone(),
-        );
-        config.fixed_fps = args.fps;
-        config.duration_seconds = args.duration;
-
-        info!("Starting single experiment: {}", experiment_id);
-        harness.run_controller(config).await?;
-        sleep(Duration::from_secs(2)).await;
-    }
-    Ok(())
+    run_engine(def, harness).await
 }
 
-async fn run_test_suite(
-    args: SuiteArgs,
-    modes: Vec<ExperimentMode>,
+async fn run_engine(
+    def: SuiteDefinition,
     harness: &ControllerHarness,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let total = args.models.len() * args.fps_values.len() * modes.len();
+    let total = def.models.len()
+        * def.fps_values.len()
+        * def.codecs.len()
+        * def.tiers.len()
+        * def.resolutions.len()
+        * def.modes.len();
+
+    info!("Starting {} suite: {} experiments total", def.name, total);
+    let start_time = Instant::now();
     let mut current = 0;
 
-    info!("Starting suite: {} total experiments", total);
-
-    for model in &args.models {
-        for fps in &args.fps_values {
-            for mode in &modes {
-                current += 1;
-                let experiment_id = format!("{mode}_{model}_{fps}fps_suite");
-
-                info!("[{}/{}] Running: {}", current, total, experiment_id);
-
-                let mut config = ExperimentConfig::new(
-                    experiment_id.clone(),
-                    mode.clone(),
-                    args.rsu_count,
-                    model.clone(),
-                    EncodingSpec {
-                        codec: ImageCodecKind::JpgLossy,
-                        tier: Tier::T2,
-                        resolution: ImageResolutionType::FHD,
-                    },
-                );
-                config.fixed_fps = *fps;
-                config.duration_seconds = args.duration;
-
-                match harness.run_controller_with_retry(config, 3).await {
-                    Ok(()) => info!("Done: {}", experiment_id),
-                    Err(e) => error!("Failed {}: {}", experiment_id, e),
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn run_full_comprehensive_suite(
-    modes: Vec<ExperimentMode>,
-    harness: &ControllerHarness,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let models = vec!["yolov5n".to_string(), "yolov5s".to_string(), "yolov5m".to_string()];
-
-    let fps_values = vec![1, 5, 10, 15];
-
-    let codecs = vec![
-        ImageCodecKind::JpgLossy,
-        ImageCodecKind::PngLossless,
-        ImageCodecKind::WebpLossy,
-        ImageCodecKind::WebpLossless,
-    ];
-
-    let tiers = vec![Tier::T1, Tier::T2, Tier::T3];
-
-    let resolutions =
-        vec![ImageResolutionType::FHD, ImageResolutionType::HD, ImageResolutionType::Letterbox];
-
-    let duration = 30;
-    let rsu_count = 3;
-
-    let total = models.len()
-        * fps_values.len()
-        * codecs.len()
-        * tiers.len()
-        * resolutions.len()
-        * modes.len();
-
-    info!("========================================");
-    info!("FULL COMPREHENSIVE SUITE (SMOKE TEST)");
-    info!("========================================");
-    info!("Models: {}", models.len());
-    info!("FPS values: {}", fps_values.len());
-    info!("Codecs: {}", codecs.len());
-    info!("Tiers: {}", tiers.len());
-    info!("Resolutions: {}", resolutions.len());
-    info!("Modes: {}", modes.len());
-    info!("RSU count: {}", rsu_count);
-    info!("Duration per experiment: {}s (smoke test)", duration);
-    info!("----------------------------------------");
-    info!("TOTAL EXPERIMENTS: {}", total);
-    info!(
-        "ESTIMATED TIME: {:.1} hours ({:.0} minutes)",
-        (total as f64 * duration as f64) / 3600.0,
-        (total as f64 * duration as f64) / 60.0
-    );
-    info!("========================================");
-
-    let mut current = 0;
-    let start_time = std::time::Instant::now();
-
-    for model in &models {
-        for fps in &fps_values {
-            for codec in &codecs {
-                for tier in &tiers {
-                    for resolution in &resolutions {
-                        for mode in &modes {
+    for model in &def.models {
+        for fps in &def.fps_values {
+            for codec in &def.codecs {
+                for tier in &def.tiers {
+                    for res in &def.resolutions {
+                        for mode in &def.modes {
                             current += 1;
-
-                            let experiment_id = format!(
-                                "{}_{}_{:?}_{:?}_{:?}_{}fps_{}rsu_full",
-                                mode, model, codec, tier, resolution, fps, rsu_count
+                            let id = format!(
+                                "{mode}_{model}_{codec:?}_{tier:?}_{res:?}_{fps}fps_{}",
+                                def.name
                             );
 
-                            let elapsed = start_time.elapsed().as_secs();
-                            let rate = if current > 1 {
-                                elapsed as f64 / (current - 1) as f64
-                            } else {
-                                0.0
-                            };
-                            let remaining_experiments = total - current;
-                            let eta_seconds = (remaining_experiments as f64 * rate) as u64;
-
-                            info!("========================================");
-                            info!("[{}/{}] Running: {}", current, total, experiment_id);
-                            info!(
-                                "Progress: {:.1}% | Elapsed: {}h {}m | ETA: {}h {}m",
-                                (current as f64 / total as f64) * 100.0,
-                                elapsed / 3600,
-                                (elapsed % 3600) / 60,
-                                eta_seconds / 3600,
-                                (eta_seconds % 3600) / 60
-                            );
-                            info!("========================================");
-
-                            let encoding_spec = EncodingSpec {
-                                codec: *codec,
-                                tier: *tier,
-                                resolution: *resolution,
-                            };
+                            log_status(current, total, &id, start_time);
 
                             let mut config = ExperimentConfig::new(
-                                experiment_id.clone(),
+                                id.clone(),
                                 mode.clone(),
-                                rsu_count,
+                                def.rsu_count,
                                 model.clone(),
-                                encoding_spec,
+                                EncodingSpec { codec: *codec, tier: *tier, resolution: *res },
                             );
                             config.fixed_fps = *fps;
-                            config.duration_seconds = duration;
+                            config.duration_seconds = def.duration;
 
-                            match harness.run_controller_with_retry(config, 3).await {
-                                Ok(()) => {
-                                    info!("Completed: {}", experiment_id);
-                                }
-                                Err(e) => {
-                                    error!("Failed {}: {}", experiment_id, e);
-                                    error!("Continuing to next experiment...");
-                                }
+                            if let Err(e) = harness.run_controller_with_retry(config, 3).await {
+                                error!("Experiment failed: {e}");
                             }
-
-                            if current < total {
-                                sleep(Duration::from_millis(100)).await;
-                            }
+                            sleep(Duration::from_millis(100)).await;
                         }
                     }
                 }
@@ -311,22 +199,14 @@ async fn run_full_comprehensive_suite(
         }
     }
 
-    let total_time = start_time.elapsed();
-    info!("========================================");
-    info!("FULL SUITE SMOKE TEST COMPLETE");
-    info!("========================================");
-    info!("Total experiments: {}", total);
-    info!(
-        "Total time: {}h {}m {}s",
-        total_time.as_secs() / 3600,
-        (total_time.as_secs() % 3600) / 60,
-        total_time.as_secs() % 60
-    );
-    info!("Average per experiment: {:.1}s", total_time.as_secs() as f64 / total as f64);
-    info!("========================================");
-    info!("NOTE: This was a 30-second smoke test.");
-    info!("Review results to select configurations for full production runs.");
-    info!("========================================");
-
+    info!("Suite '{}' finished in {}s", def.name, start_time.elapsed().as_secs());
     Ok(())
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn log_status(current: usize, total: usize, id: &str, start: Instant) {
+    let elapsed = start.elapsed().as_secs();
+    let progress = (current as f64 / total as f64) * 100.0;
+
+    info!("[{current}/{total}] {progress:.1}% | Elapsed: {elapsed}s | Running: {id}");
 }

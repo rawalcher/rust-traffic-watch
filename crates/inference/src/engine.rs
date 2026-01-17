@@ -58,7 +58,7 @@ impl OnnxDetector {
 
         // Preprocess: resize with padding and normalize
         let (input_tensor, scale, pad_x, pad_y) =
-            letterbox_nchw(&image, IMAGE_SIZE as u32, BGR_MODE)?;
+            letterbox_nchw(&image, u32::try_from(IMAGE_SIZE)?, BGR_MODE);
 
         // Run inference
         let input_ref = TensorRef::from_array_view(input_tensor.view())?;
@@ -76,24 +76,22 @@ impl OnnxDetector {
             &self.allowed_classes,
         );
 
-        // Convert back to original image coordinates
-        let detections = rescale_detections(
-            &boxes,
-            &scores,
-            &class_ids,
-            &self.class_names,
+        let params = super::utils::RescaleParams {
             scale,
             pad_x,
             pad_y,
-            original_width,
-            original_height,
-        );
+            orig_width: original_width,
+            orig_height: original_height,
+        };
+
+        let detections =
+            rescale_detections(&boxes, &scores, &class_ids, &self.class_names, &params);
 
         Ok(InferenceResult {
             sequence_id: 0,
-            processing_time_us: start.elapsed().as_micros() as u64,
-            frame_size_bytes: image_bytes.len() as u32,
-            detection_count: detections.len() as u32,
+            processing_time_us: u64::try_from(start.elapsed().as_micros())?,
+            frame_size_bytes: u32::try_from(image_bytes.len())?,
+            detection_count: u32::try_from(detections.len())?,
             detections,
             image_width: original_width,
             image_height: original_height,

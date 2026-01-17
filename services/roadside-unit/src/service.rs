@@ -84,7 +84,7 @@ async fn run_local_experiment(
             msg = read_message(ctrl_reader) => {
                 match msg {
                     Ok(Message::Pulse(mut timing)) => {
-                        timing.source_device = source_device.clone();
+                        timing.source_device.clone_from(&source_device);
                         timing.capture_start = Some(current_timestamp_micros());
 
                         let frame_number = timing.frame_number;
@@ -172,7 +172,7 @@ async fn run_offload_experiment(
     loop {
         match read_message(ctrl_reader).await {
             Ok(Message::Pulse(mut timing)) => {
-                timing.source_device = source_device.clone();
+                timing.source_device.clone_from(&source_device);
                 timing.capture_start = Some(current_timestamp_micros());
 
                 let frame_number = timing.frame_number;

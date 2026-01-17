@@ -19,6 +19,8 @@ use protocol::{
 
 pub struct ControllerHarness;
 
+const MAX_WAIT: Duration = Duration::from_secs(10);
+
 impl ControllerHarness {
     #[must_use]
     pub const fn new() -> Self {
@@ -45,7 +47,6 @@ impl ControllerHarness {
                         e
                     );
                     sleep(Duration::from_secs(5)).await;
-                    continue;
                 }
                 Err(e) => return Err(e),
             }
@@ -226,11 +227,10 @@ impl ControllerHarness {
         info!("Finished sending {} pulses. Waiting for results...", expected_results);
 
         let wait_start = Instant::now();
-        const MAX_WAIT: Duration = Duration::from_secs(10);
 
         while wait_start.elapsed() < MAX_WAIT {
             let current_count = csv_writer.count().await;
-            if current_count >= expected_results as usize {
+            if current_count >= usize::try_from(expected_results)? {
                 info!("All {} results received!", current_count);
                 break;
             }
