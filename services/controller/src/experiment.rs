@@ -92,8 +92,8 @@ pub async fn execute(
             let quick_args = SuiteArgs {
                 models: vec!["yolov5n".into()],
                 fps_values: vec![1, 10],
-                duration: 60,
-                rsu_count: 1,
+                duration: 30,
+                rsu_count: 2,
             };
             run_test_suite(quick_args, modes, harness).await
         }
