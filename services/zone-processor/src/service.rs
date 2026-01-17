@@ -1,43 +1,43 @@
-use inference::inference_manager::InferenceManager;
-use inference::persistent::perform_onnx_inference_with_counts;
-use network::connection::{wait_for_config, wait_for_start};
-use network::framing::{read_message, read_message_stream};
-use protocol::config::zone_processor_bind_address;
-use protocol::{current_timestamp_micros, ControlMessage, DeviceId, InferenceMessage, Message};
 use std::error::Error;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
-pub async fn run_experiment_cycle(
-    ctrl_reader: &mut OwnedReadHalf,
-    ctrl_tx: mpsc::Sender<Message>,
-) -> Result<bool, Box<dyn Error + Send + Sync>> {
-    let Some(config) = wait_for_config(ctrl_reader).await? else {
-        return Ok(false);
+use inference::inference_manager::InferenceManager;
+use inference::persistent::perform_onnx_inference_with_counts;
+use network::connection::{signal_ready, wait_for_config, wait_for_start};
+use network::framing::{read_message, read_message_stream, spawn_writer};
+use protocol::config::{controller_address, zone_processor_bind_address};
+use protocol::{current_timestamp_micros, ControlMessage, DeviceId, InferenceMessage, Message};
+
+/// # Errors
+pub async fn run_single_experiment(
+    device_id: DeviceId,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let stream = TcpStream::connect(controller_address()).await?;
+    let (mut ctrl_reader, ctrl_writer) = stream.into_split();
+    let ctrl_tx = spawn_writer(ctrl_writer, 64);
+
+    ctrl_tx.send(Message::Hello(device_id)).await?;
+    info!("Connected to controller, sent Hello");
+
+    let Some(config) = wait_for_config(&mut ctrl_reader).await? else {
+        info!("Received shutdown before config");
+        return Ok(());
     };
 
-    let num_roadside_units = config.num_roadside_units;
-
+    let num_rsus = config.num_roadside_units;
     info!(
-        "Received experiment config: mode={:?}, model={}, codec={:?}, tier={:?}",
-        config.mode, config.model_name, config.encoding_spec.codec, config.encoding_spec.tier
+        "Received config: mode={:?}, model={}, expecting {} RSUs",
+        config.mode, config.model_name, num_rsus
     );
 
-    info!("Initializing ONNX inference manager with model '{}'", config.model_name);
-    let mut manager =
-        InferenceManager::new(config.model_name.clone(), &std::path::PathBuf::from("models"))?;
-
-    info!(
-        "Waiting for {num_roadside_units} RSUs to connect on {}...",
-        zone_processor_bind_address()
-    );
-
-    let listener = TcpListener::bind(zone_processor_bind_address()).await?;
+    info!("Initializing inference with model '{}'", config.model_name);
+    let mut manager = InferenceManager::new(config.model_name.clone(), &PathBuf::from("models"))?;
 
     let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
@@ -45,52 +45,56 @@ pub async fn run_experiment_cycle(
         frame.timing.receive_start = Some(current_timestamp_micros());
         let inference = perform_onnx_inference_with_counts(&mut frame, detector)?;
         frame.timing.send_result = Some(current_timestamp_micros());
-
         Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
     });
 
-    // Wrap in Arc<Mutex<>> to share across tasks
     let manager = Arc::new(Mutex::new(manager));
-    let mut connected_count = 0;
-    let mut rsu_handles: Vec<JoinHandle<()>> = Vec::new();
 
-    while connected_count < num_roadside_units {
+    let bind_addr = zone_processor_bind_address();
+    info!("Listening for RSUs on {}", bind_addr);
+    let listener = TcpListener::bind(&bind_addr).await?;
+
+    let mut rsu_handles: Vec<JoinHandle<()>> = Vec::new();
+    let mut connected_count = 0u8;
+
+    while connected_count < num_rsus {
         let (mut rsu_stream, rsu_addr) = listener.accept().await?;
-        info!("RSU connected ({}/{}): {rsu_addr}", connected_count + 1, num_roadside_units);
+        info!("RSU connection from {} ({}/{})", rsu_addr, connected_count + 1, num_rsus);
 
         let hello = read_message_stream(&mut rsu_stream).await?;
-        let rsu_device_id = match hello {
-            Message::Hello(DeviceId::RoadsideUnit(id)) => {
-                info!("RSU-{id:04} handshake successful");
-                DeviceId::RoadsideUnit(id)
+        let rsu_id = match hello {
+            Message::Hello(id @ DeviceId::RoadsideUnit(_)) => {
+                info!("RSU {} handshake successful", id);
+                id
             }
             other => {
-                warn!("Unexpected handshake from {rsu_addr}: {other:?}");
+                warn!("Expected Hello from RSU, got {:?}", other);
                 continue;
             }
         };
 
         let manager_clone = Arc::clone(&manager);
-
         let handle = tokio::spawn(async move {
             let (mut reader, _writer) = rsu_stream.into_split();
+
             loop {
                 match read_message(&mut reader).await {
                     Ok(Message::Frame(frame)) => {
-                        manager_clone.lock().await.update_pending_frame(rsu_device_id, frame).await;
+                        manager_clone.lock().await.update_pending_frame(rsu_id, frame).await;
                     }
                     Ok(Message::Control(ControlMessage::Shutdown)) => {
-                        info!("RSU {} sent shutdown", rsu_device_id);
+                        info!("RSU {} sent shutdown", rsu_id);
                         break;
+                    }
+                    Ok(other) => {
+                        debug!("RSU {} sent unexpected: {:?}", rsu_id, other);
                     }
                     Err(e) => {
-                        info!("RSU {} disconnected: {}", rsu_device_id, e);
+                        debug!("RSU {} disconnected: {}", rsu_id, e);
                         break;
                     }
-                    _ => {}
                 }
             }
-            debug!("RSU handler for {} terminated", rsu_device_id);
         });
 
         rsu_handles.push(handle);
@@ -98,74 +102,76 @@ pub async fn run_experiment_cycle(
     }
 
     drop(listener);
-    info!("All RSUs connected. Closed listener. Notifying controller.");
+    info!("All {} RSUs connected, listener closed", num_rsus);
 
-    ctrl_tx.send(Message::Control(ControlMessage::ReadyToStart)).await.ok();
-    wait_for_start(ctrl_reader).await?;
-    info!("Experiment started - Processing frames from all RSUs");
+    signal_ready(&ctrl_tx).await?;
+    info!("Signaled ready to controller");
+
+    if !wait_for_start(&mut ctrl_reader).await? {
+        info!("Received shutdown before start");
+        shutdown_manager(manager).await;
+        return Ok(());
+    }
+
+    info!("Experiment started - processing frames");
 
     loop {
         tokio::select! {
             Some(result) = result_rx.recv() => {
                 if ctrl_tx.send(Message::Result(result)).await.is_err() {
+                    error!("Controller connection lost");
                     break;
                 }
             }
 
-            msg = read_message(ctrl_reader) => {
-                match msg? {
-                    Message::Control(ControlMessage::Shutdown) => {
-                        info!("Shutdown received from controller");
+            msg = read_message(&mut ctrl_reader) => {
+                match msg {
+                    Ok(Message::Control(ControlMessage::Shutdown)) => {
+                        info!("Received shutdown from controller");
                         break;
                     }
-                    _ => {}
+                    Ok(other) => {
+                        debug!("Ignored unexpected message: {:?}", other);
+                    }
+                    Err(e) => {
+                        error!("Controller read error: {}", e);
+                        break;
+                    }
                 }
             }
         }
     }
 
     info!("Waiting for RSU handlers to complete...");
+    let shutdown_timeout = Duration::from_secs(5);
 
-    const RSU_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-
-    match timeout(RSU_SHUTDOWN_TIMEOUT, futures::future::join_all(rsu_handles)).await {
-        Ok(results) => {
-            let mut panicked = 0;
-            for (idx, result) in results.into_iter().enumerate() {
-                if let Err(e) = result {
-                    error!("RSU handler {} panicked: {:?}", idx, e);
-                    panicked += 1;
-                }
-            }
-            if panicked > 0 {
-                warn!("{} RSU handlers panicked during shutdown", panicked);
-            } else {
-                info!("All RSU handlers completed successfully");
-            }
-        }
-        Err(_) => {
-            warn!(
-                "RSU handlers did not complete within {:?}, forcing shutdown",
-                RSU_SHUTDOWN_TIMEOUT
-            );
+    for (idx, handle) in rsu_handles.into_iter().enumerate() {
+        match timeout(shutdown_timeout, handle).await {
+            Ok(Ok(())) => debug!("RSU handler {} completed", idx),
+            Ok(Err(e)) => warn!("RSU handler {} panicked: {:?}", idx, e),
+            Err(_) => warn!("RSU handler {} timed out", idx),
         }
     }
 
+    shutdown_manager(manager).await;
+
+    info!("Experiment completed");
+    Ok(())
+}
+
+async fn shutdown_manager(manager: Arc<Mutex<InferenceManager>>) {
     match Arc::try_unwrap(manager) {
         Ok(mutex) => {
-            let mut manager = mutex.into_inner();
-            manager.shutdown().await;
+            let mut m = mutex.into_inner();
+            m.shutdown().await;
             info!("Inference manager shut down cleanly");
         }
         Err(arc) => {
-            warn!("Cannot unwrap Arc - {} strong references remain", Arc::strong_count(&arc));
-
-            let mut manager = arc.lock().await;
-            manager.shutdown().await;
-            info!("Inference manager shut down via Arc lock");
+            warn!(
+                "Cannot unwrap manager Arc ({} refs), shutting down via lock",
+                Arc::strong_count(&arc)
+            );
+            arc.lock().await.shutdown().await;
         }
     }
-
-    info!("Experiment cycle complete - all RSU connections closed");
-    Ok(true)
 }

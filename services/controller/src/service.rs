@@ -1,53 +1,28 @@
 use std::error::Error;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{debug, info, warn};
 
 use crate::csv_writer::ConcurrentCsvWriter;
-use network::connection;
-use network::connection::{
-    get_device_sender, start_controller_listener, wait_for_device_readiness, wait_for_devices, Role,
+use network::connection::ExperimentConnections;
+use network::framing::read_message;
+use protocol::config::{
+    compute_skip, controller_bind_address, fps_to_interval, MAX_FRAME_SEQUENCE,
 };
-use protocol::config::{compute_skip, fps_to_interval, MAX_FRAME_SEQUENCE};
 use protocol::types::{ExperimentConfig, ExperimentMode};
 use protocol::{
     current_timestamp_micros, ControlMessage, DeviceId, InferenceMessage, Message, TimingMetadata,
 };
 
-pub struct ControllerHarness {
-    active_sink_tx: watch::Sender<Option<mpsc::UnboundedSender<InferenceMessage>>>,
-    _forwarder_task: JoinHandle<()>,
-    _listener_task: JoinHandle<()>,
-}
+pub struct ControllerHarness;
 
 impl ControllerHarness {
-    pub fn new() -> Self {
-        let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<InferenceMessage>();
-
-        let listener_task = tokio::spawn(async move {
-            if let Err(e) =
-                start_controller_listener(Role::Controller { result_handler: raw_tx }).await
-            {
-                warn!("controller listener exited with error: {:?}", e);
-            }
-        });
-
-        let (active_sink_tx, active_sink_rx) =
-            watch::channel::<Option<mpsc::UnboundedSender<InferenceMessage>>>(None);
-
-        let forwarder_task = tokio::spawn(async move {
-            let sink_rx = active_sink_rx;
-            while let Some(msg) = raw_rx.recv().await {
-                let value = sink_rx.borrow().clone();
-                if let Some(sink) = value {
-                    let _ = sink.send(msg);
-                }
-            }
-        });
-
-        Self { active_sink_tx, _forwarder_task: forwarder_task, _listener_task: listener_task }
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
     }
 
     pub async fn run_controller_with_retry(
@@ -60,24 +35,20 @@ impl ControllerHarness {
         loop {
             attempt += 1;
 
-            return match self.run_controller(config.clone()).await {
-                Ok(()) => Ok(()),
+            match self.run_controller(config.clone()).await {
+                Ok(()) => return Ok(()),
                 Err(e) if attempt <= max_retries => {
-                    if e.to_string().contains("disconnected")
-                        || e.to_string().contains("writer channel closed")
-                    {
-                        warn!(
-                            "Device disconnected. Restarting experiment in 30s (attempt {}/{})",
-                            attempt + 1,
-                            max_retries + 1
-                        );
-                        sleep(Duration::from_secs(30)).await;
-                        continue;
-                    }
-                    Err(e)
+                    warn!(
+                        "Experiment failed (attempt {}/{}): {}. Retrying in 5s...",
+                        attempt,
+                        max_retries + 1,
+                        e
+                    );
+                    sleep(Duration::from_secs(5)).await;
+                    continue;
                 }
-                Err(e) => Err(e),
-            };
+                Err(e) => return Err(e),
+            }
         }
     }
 
@@ -89,34 +60,62 @@ impl ControllerHarness {
         &self,
         config: ExperimentConfig,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        info!("========================================");
         info!("Starting experiment: {}", config.experiment_id);
         info!(
-            "Mode: {:?}, Model: {}, FPS: {}, Duration: {}s",
-            config.mode, config.model_name, config.fixed_fps, config.duration_seconds
+            "Mode: {:?}, Model: {}, FPS: {}, Duration: {}s, RSUs: {}",
+            config.mode,
+            config.model_name,
+            config.fixed_fps,
+            config.duration_seconds,
+            config.num_roadside_units
         );
+        info!("========================================");
 
         if config.num_roadside_units == 0 {
             return Err("Cannot run experiment with 0 Roadside Units.".into());
         }
 
-        connection::clear_ready_devices().await;
+        let rsu_devices: Vec<DeviceId> =
+            (0..config.num_roadside_units).map(DeviceId::RoadsideUnit).collect();
 
-        let (inference_tx, mut inference_rx) = mpsc::unbounded_channel::<InferenceMessage>();
+        let required_devices: Vec<DeviceId> = match config.mode {
+            ExperimentMode::Local => rsu_devices.clone(),
+            ExperimentMode::Offload => {
+                let mut devices = rsu_devices.clone();
+                devices.push(DeviceId::ZoneProcessor(0));
+                devices
+            }
+        };
+
+        let bind_addr = controller_bind_address();
+        info!("Binding listener on {}", bind_addr);
+        let listener = TcpListener::bind(&bind_addr).await?;
+
+        let mut connections = ExperimentConnections::new();
+        connections.accept_devices(&listener, &required_devices).await?;
+
+        drop(listener);
+        info!("All devices connected, listener closed");
+
+        connections.send_config_to_all(&config).await?;
+
+        connections.wait_for_all_ready().await?;
 
         let csv_writer = ConcurrentCsvWriter::new(&config.experiment_id, config.clone())?;
 
-        let _ = self.active_sink_tx.send(Some(inference_tx.clone()));
-
-        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
         let csv_writer_clone = csv_writer.clone();
-        let result_collection_task = tokio::spawn(async move {
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+
+        let result_collection_task: JoinHandle<()> = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = stop_rx.changed() => {
                         if *stop_rx.borrow() { break; }
                     }
-                    maybe = inference_rx.recv() => {
+                    maybe = result_rx.recv() => {
                         match maybe {
                             Some(mut result) => {
                                 result.timing.controller_received = Some(current_timestamp_micros());
@@ -131,7 +130,7 @@ impl ControllerHarness {
                                 }
 
                                 debug!(
-                                    "Controller received result {} for seq={} (mode={}, detections={})",
+                                    "Result {} seq={} mode={} detections={}",
                                     count,
                                     result.sequence_id,
                                     result.timing.mode_str(),
@@ -146,44 +145,49 @@ impl ControllerHarness {
             info!("Result collection task finished");
         });
 
-        let rsu_devices: Vec<DeviceId> =
-            (0..config.num_roadside_units).map(DeviceId::RoadsideUnit).collect();
+        let device_readers = connections.take_all_readers();
 
-        let required_devices = match config.mode {
-            ExperimentMode::Local => rsu_devices,
-            ExperimentMode::Offload => {
-                let mut devices = rsu_devices;
-                devices.push(DeviceId::ZoneProcessor(0));
-                devices
-            }
-        };
+        let mut read_handles: Vec<JoinHandle<()>> = Vec::new();
 
-        info!("Waiting for required devices: {:?}", required_devices);
-        wait_for_devices(&required_devices).await;
+        for (device_id, mut reader) in device_readers {
+            let result_tx_clone = result_tx.clone();
 
-        let msg = Message::Control(ControlMessage::ConfigureExperiment { config: config.clone() });
-        for id in &required_devices {
-            if let Some(sender) = get_device_sender(id).await {
-                sender.send(msg.clone())?;
-            }
+            let handle = tokio::spawn(async move {
+                loop {
+                    match read_message(&mut reader).await {
+                        Ok(Message::Result(result)) => {
+                            if result_tx_clone.send(result).is_err() {
+                                debug!("Result channel closed for {}", device_id);
+                                break;
+                            }
+                        }
+                        Ok(Message::Control(ControlMessage::ReadyToStart)) => {
+                            // Ignore late ready signals
+                        }
+                        Ok(other) => {
+                            debug!("Device {} sent unexpected: {:?}", device_id, other);
+                        }
+                        Err(e) => {
+                            debug!("Device {} read error (likely disconnected): {}", device_id, e);
+                            break;
+                        }
+                    }
+                }
+            });
+
+            read_handles.push(handle);
         }
 
-        wait_for_device_readiness(&required_devices).await;
-
-        let begin_msg = Message::Control(ControlMessage::BeginExperiment);
-        for id in &required_devices {
-            if let Some(sender) = get_device_sender(id).await {
-                sender.send(begin_msg.clone())?;
-            }
-        }
+        connections.signal_begin().await?;
+        info!("Experiment started!");
 
         let start = Instant::now();
         let mut sequence_id: u64 = 0;
         let mut frame_number: u64 = 1;
         let pulse_interval = fps_to_interval(config.fixed_fps);
+        let frame_skip = compute_skip(config.fixed_fps);
 
         let mut expected_results = 0u64;
-        let frame_skip = compute_skip(config.fixed_fps);
 
         while start.elapsed().as_secs() < config.duration_seconds {
             let timing = TimingMetadata {
@@ -200,12 +204,12 @@ impl ControllerHarness {
             let mut pulse_sent = false;
             for i in 0..config.num_roadside_units {
                 let rsu_id = DeviceId::RoadsideUnit(i);
-                if let Some(sender) = get_device_sender(&rsu_id).await {
-                    sender.send(pulse_msg.clone())?;
-                    debug!("Sent pulse {} to {} (mode={:?})", sequence_id, rsu_id, config.mode);
-                    pulse_sent = true;
-                } else {
-                    warn!("Could not get sender for {}. Skipping pulse.", rsu_id);
+                if let Some(sender) = connections.get_sender(&rsu_id) {
+                    if sender.send(pulse_msg.clone()).await.is_ok() {
+                        pulse_sent = true;
+                    } else {
+                        warn!("Failed to send pulse to {}", rsu_id);
+                    }
                 }
             }
 
@@ -219,67 +223,67 @@ impl ControllerHarness {
             sleep(pulse_interval).await;
         }
 
-        info!(
-            "Finished sending {} pulses ({} pulses/RSU). Waiting for results...",
-            expected_results,
-            expected_results / u64::from(config.num_roadside_units)
-        );
+        info!("Finished sending {} pulses. Waiting for results...", expected_results);
 
         let wait_start = Instant::now();
-        const MAX_WAIT: Duration = Duration::from_secs(5);
+        const MAX_WAIT: Duration = Duration::from_secs(10);
 
         while wait_start.elapsed() < MAX_WAIT {
             let current_count = csv_writer.count().await;
-
             if current_count >= expected_results as usize {
                 info!("All {} results received!", current_count);
                 break;
             }
-
             sleep(Duration::from_millis(100)).await;
         }
 
         let final_count = csv_writer.count().await;
         info!(
-            "Collected {} results out of {} pulses sent ({:.1}% success rate)",
+            "Collected {} results out of {} expected ({:.1}%)",
             final_count,
             expected_results,
-            (final_count as f32 / expected_results as f32) * 100.0
+            (final_count as f64 / expected_results as f64) * 100.0
         );
 
-        let shutdown = Message::Control(ControlMessage::Shutdown);
-        for id in &required_devices {
-            if let Some(sender) = get_device_sender(id).await {
-                let _ = sender.send(shutdown.clone());
-            }
-        }
-
-        info!("Waiting for devices to disconnect...");
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        connection::force_disconnect_devices(&required_devices).await;
-        info!("All devices disconnected");
+        info!("Sending shutdown signal to all devices...");
+        connections.signal_shutdown().await;
 
         let _ = stop_tx.send(true);
-        let _ = self.active_sink_tx.send(None);
-        drop(inference_tx);
+        drop(result_tx);
 
-        match timeout(Duration::from_secs(2), result_collection_task).await {
-            Ok(joined) => {
-                if let Err(e) = joined {
-                    warn!("Result collection task error: {:?}", e);
-                }
-            }
-            Err(_) => {
-                warn!("Result collector did not stop in time; it will end soon.");
+        info!("Waiting for device read tasks to complete...");
+        let read_timeout = Duration::from_secs(5);
+
+        for (idx, handle) in read_handles.into_iter().enumerate() {
+            match timeout(read_timeout, handle).await {
+                Ok(Ok(())) => debug!("Read task {} completed", idx),
+                Ok(Err(e)) => warn!("Read task {} panicked: {:?}", idx, e),
+                Err(_) => warn!("Read task {} timed out", idx),
             }
         }
 
-        info!("Shutdown complete");
+        match timeout(Duration::from_secs(2), result_collection_task).await {
+            Ok(Ok(())) => debug!("Result collection task completed"),
+            Ok(Err(e)) => warn!("Result collection task panicked: {:?}", e),
+            Err(_) => warn!("Result collection task timed out"),
+        }
 
         let final_count = csv_writer.finalize()?;
-        info!("Experiment {} completed with {} results saved", config.experiment_id, final_count);
+
+        info!("========================================");
+        info!("Experiment {} completed", config.experiment_id);
+        info!("Results saved: {}", final_count);
+        info!("========================================");
+
+        sleep(Duration::from_secs(1)).await;
+
         Ok(())
+    }
+}
+
+impl Default for ControllerHarness {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

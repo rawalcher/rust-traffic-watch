@@ -1962,10 +1962,10 @@ dependencies = [
  "clap",
  "image 0.25.9",
  "inference",
- "log",
  "network",
  "protocol",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

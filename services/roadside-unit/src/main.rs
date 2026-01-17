@@ -2,16 +2,13 @@ mod frame_loader;
 mod service;
 
 use clap::Parser;
-use log::{error, info};
 use std::error::Error;
 use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::time::sleep;
+use tracing::{error, info, warn};
 
-use network::framing::spawn_writer;
 use protocol::config::controller_address;
-use protocol::{DeviceId, Message};
-use service::run_experiment_cycle;
+use protocol::DeviceId;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Roadside Unit (RSU)")]
@@ -35,31 +32,23 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Starting {} (use --id to change)", device_id);
 
     loop {
-        info!("Connecting to controller at {}", controller_address());
+        info!("Connecting to controller at {}...", controller_address());
 
-        match TcpStream::connect(controller_address()).await {
-            Ok(controller_stream) => {
-                let (mut ctrl_reader, ctrl_writer) = controller_stream.into_split();
-                let ctrl_tx = spawn_writer(ctrl_writer, 10);
-
-                ctrl_tx.send(Message::Hello(device_id)).await.ok();
-
-                match run_experiment_cycle(&mut ctrl_reader, ctrl_tx.clone(), device_id).await {
-                    Ok(true) => {
-                        info!("Experiment complete - reconnecting for next one");
-                    }
-                    Ok(false) => {
-                        info!("Shutdown received - reconnecting");
-                    }
-                    Err(e) => {
-                        error!("Experiment error: {e}");
-                    }
-                }
-
-                sleep(Duration::from_millis(500)).await;
+        match service::run_single_experiment(device_id).await {
+            Ok(()) => {
+                info!("Experiment completed successfully");
             }
-            Err(e) => error!("Connection failed: {e}. Retrying in 2s..."),
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("Connection refused") || err_str.contains("connection") {
+                    warn!("Controller not available: {}", err_str);
+                } else {
+                    error!("Experiment error: {}", e);
+                }
+            }
         }
-        sleep(Duration::from_secs(2)).await;
+
+        info!("Waiting 3s before reconnecting...");
+        sleep(Duration::from_secs(3)).await;
     }
 }

@@ -1,191 +1,165 @@
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::collections::HashMap;
 
-use crate::framing::{read_message, read_message_stream, send_message};
 use anyhow::Result;
-use protocol::config::{controller_bind_address, zone_processor_bind_address};
 use protocol::types::ExperimentConfig;
-use protocol::{ControlMessage, DeviceId, FrameMessage, InferenceMessage, Message};
+use protocol::{ControlMessage, DeviceId, Message};
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-pub type DeviceSender = mpsc::UnboundedSender<Message>;
-pub type DeviceReceiver = mpsc::UnboundedReceiver<Message>;
+use crate::framing::{read_message, spawn_writer};
 
-static DEVICES: std::sync::LazyLock<Mutex<HashMap<DeviceId, DeviceSender>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static READY_DEVICES: std::sync::LazyLock<Mutex<HashSet<DeviceId>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
-
-#[derive(Clone)]
-pub enum Role {
-    Controller { result_handler: mpsc::UnboundedSender<InferenceMessage> },
-    ZoneProcessor { frame_handler: mpsc::UnboundedSender<FrameMessage> },
+pub struct ConnectedDevice {
+    pub id: DeviceId,
+    pub tx: mpsc::Sender<Message>,
+    pub reader: OwnedReadHalf,
 }
 
-/// # Errors
-pub async fn start_controller_listener(role: Role) -> tokio::io::Result<()> {
-    let addr = controller_bind_address();
-    let listener = TcpListener::bind(&addr).await?;
-    debug!("Controller listening on {}", addr);
+pub struct ExperimentConnections {
+    pub devices: HashMap<DeviceId, mpsc::Sender<Message>>,
+    device_readers: HashMap<DeviceId, OwnedReadHalf>,
+}
 
-    loop {
-        let (stream, peer) = listener.accept().await?;
-        debug!("Incoming connection from {}", peer);
-
-        let role_clone = role.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_device_connection(stream, role_clone).await {
-                error!("Connection error: {e:?}");
-            }
-        });
+impl ExperimentConnections {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { devices: HashMap::new(), device_readers: HashMap::new() }
     }
-}
 
-/// # Errors
-pub async fn wait_for_rsu_on_zone_processor(role: Role) -> tokio::io::Result<()> {
-    let addr = zone_processor_bind_address();
-    debug!("Zone Processor binding to {}", addr);
+    /// # Errors
+    pub async fn accept_devices(
+        &mut self,
+        listener: &TcpListener,
+        expected: &[DeviceId],
+    ) -> Result<()> {
+        info!("Waiting for {} devices to connect...", expected.len());
 
-    let listener = TcpListener::bind(&addr).await.map_err(|e| {
-        error!("Failed to bind to {}: {}", addr, e);
-        e
-    })?;
+        while self.devices.len() < expected.len() {
+            let (stream, peer_addr) = listener.accept().await?;
+            debug!("Incoming connection from {}", peer_addr);
 
-    let (stream, peer) = listener.accept().await?;
-    debug!("Zone Processor accepted connection from {}", peer);
+            let (mut reader, writer) = stream.into_split();
 
-    handle_device_connection(stream, role).await.map_err(|e| std::io::Error::other(e.to_string()))
-}
-
-/// # Errors
-pub async fn handle_device_connection(stream: TcpStream, role: Role) -> Result<()> {
-    let mut stream = stream;
-    let hello = read_message_stream(&mut stream).await?;
-
-    let device_id = match hello {
-        Message::Hello(id) => id,
-        other => {
-            warn!("Unexpected first message: {other:?}");
-            return Ok(());
-        }
-    };
-
-    debug!("Registered device: {device_id:?}");
-
-    let (tx, mut rx): (DeviceSender, DeviceReceiver) = mpsc::unbounded_channel();
-    DEVICES.lock().await.insert(device_id, tx);
-
-    let (mut reader, mut writer) = stream.into_split();
-
-    let write_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if let Err(e) = send_message(&mut writer, &msg).await {
-                error!("Failed to send to {device_id:?}: {e:?}");
-                break;
-            }
-        }
-        debug!("{device_id:?} write task ended");
-    });
-
-    let read_task = tokio::spawn(async move {
-        loop {
             match read_message(&mut reader).await {
-                Ok(msg) => match (&role, msg) {
-                    (Role::Controller { result_handler }, Message::Result(result)) => {
-                        let _ = result_handler.send(result);
+                Ok(Message::Hello(device_id)) => {
+                    if !expected.contains(&device_id) {
+                        warn!("Unexpected device {} connected, rejecting", device_id);
+                        continue;
                     }
-                    (Role::Controller { .. }, Message::Control(ControlMessage::ReadyToStart)) => {
-                        mark_device_ready(device_id).await;
-                        info!("{device_id:?} is now ready");
+
+                    if self.devices.contains_key(&device_id) {
+                        warn!("Device {} already connected, rejecting duplicate", device_id);
+                        continue;
                     }
-                    (Role::ZoneProcessor { frame_handler }, Message::Frame(frame)) => {
-                        let _ = frame_handler.send(frame);
-                    }
-                    _ => {}
-                },
+
+                    let tx = spawn_writer(writer, 64);
+                    self.devices.insert(device_id, tx);
+                    self.device_readers.insert(device_id, reader);
+
+                    info!(
+                        "Device {} connected ({}/{})",
+                        device_id,
+                        self.devices.len(),
+                        expected.len()
+                    );
+                }
+                Ok(other) => {
+                    warn!("Expected Hello, got {:?}", other);
+                }
                 Err(e) => {
-                    error!("{device_id:?} disconnected: {e:?}");
-                    break;
+                    warn!("Failed to read Hello: {}", e);
                 }
             }
         }
-        debug!("{device_id:?} read task ended");
-    });
 
-    let _ = tokio::try_join!(write_task, read_task);
-    DEVICES.lock().await.remove(&device_id);
-    READY_DEVICES.lock().await.remove(&device_id);
-    debug!("Removed {device_id:?} from DEVICES and READY_DEVICES");
-    Ok(())
-}
+        info!("All {} devices connected", expected.len());
+        Ok(())
+    }
 
-pub async fn get_device_sender(id: &DeviceId) -> Option<DeviceSender> {
-    DEVICES.lock().await.get(id).cloned()
-}
+    /// # Errors
+    pub async fn send_config_to_all(&self, config: &ExperimentConfig) -> Result<()> {
+        let msg = Message::Control(ControlMessage::ConfigureExperiment { config: config.clone() });
 
-pub async fn mark_device_ready(id: DeviceId) {
-    READY_DEVICES.lock().await.insert(id);
-}
-
-pub async fn is_device_ready(id: &DeviceId) -> bool {
-    READY_DEVICES.lock().await.contains(id)
-}
-
-pub async fn wait_for_devices(expected: &[DeviceId]) {
-    loop {
-        let connected = {
-            let map = DEVICES.lock().await;
-            expected.iter().all(|id| map.contains_key(id))
-        };
-        if connected {
-            break;
-        }
-
-        for id in expected {
-            let map = DEVICES.lock().await;
-            if !map.contains_key(id) {
-                info!("Waiting for {id:?} to connect...");
+        for (id, tx) in &self.devices {
+            if tx.send(msg.clone()).await.is_err() {
+                error!("Failed to send config to {}", id);
             }
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        Ok(())
     }
-    info!("All devices connected");
-}
 
-pub async fn wait_for_device_readiness(expected: &[DeviceId]) {
-    loop {
-        let all_ready = {
-            let ready = READY_DEVICES.lock().await;
-            expected.iter().all(|id| ready.contains(id))
-        };
-        if all_ready {
-            break;
-        }
+    /// # Errors
+    pub async fn wait_for_all_ready(&mut self) -> Result<()> {
+        let mut ready_count = 0;
+        let total = self.devices.len();
 
-        for id in expected {
-            if !is_device_ready(id).await {
-                info!("Waiting for {id:?} to be ready...");
+        info!("Waiting for {} devices to be ready...", total);
+
+        for (device_id, reader) in &mut self.device_readers {
+            loop {
+                match read_message(reader).await? {
+                    Message::Control(ControlMessage::ReadyToStart) => {
+                        ready_count += 1;
+                        info!("Device {} ready ({}/{})", device_id, ready_count, total);
+                        break;
+                    }
+                    other => {
+                        warn!("Waiting for ReadyToStart from {}, got {:?}", device_id, other);
+                    }
+                }
             }
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        info!("All {} devices ready", total);
+        Ok(())
+    }
+
+    /// # Errors
+    pub async fn signal_begin(&self) -> Result<()> {
+        let msg = Message::Control(ControlMessage::BeginExperiment);
+
+        for (id, tx) in &self.devices {
+            if tx.send(msg.clone()).await.is_err() {
+                error!("Failed to send BeginExperiment to {}", id);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Send Shutdown to all devices
+    pub async fn signal_shutdown(&self) {
+        let msg = Message::Control(ControlMessage::Shutdown);
+
+        for (id, tx) in &self.devices {
+            if tx.send(msg.clone()).await.is_err() {
+                debug!("Device {} already disconnected", id);
+            }
+        }
+    }
+
+    /// Get sender for a specific device
+    #[must_use]
+    pub fn get_sender(&self, id: &DeviceId) -> Option<&mpsc::Sender<Message>> {
+        self.devices.get(id)
+    }
+
+    /// Take ownership of a device's reader (for spawning read tasks)
+    pub fn take_reader(&mut self, id: &DeviceId) -> Option<OwnedReadHalf> {
+        self.device_readers.remove(id)
+    }
+
+    /// Take all readers (consumes them from the struct)
+    pub fn take_all_readers(&mut self) -> HashMap<DeviceId, OwnedReadHalf> {
+        std::mem::take(&mut self.device_readers)
     }
 }
 
-pub async fn clear_ready_devices() {
-    READY_DEVICES.lock().await.clear();
-}
-
-pub async fn force_disconnect_devices(device_ids: &[DeviceId]) {
-    let mut devices = DEVICES.lock().await;
-    let mut ready = READY_DEVICES.lock().await;
-
-    for id in device_ids {
-        devices.remove(id);
-        ready.remove(id);
-        debug!("Force disconnected {id:?}");
+impl Default for ExperimentConnections {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -201,30 +175,40 @@ pub async fn wait_for_config(reader: &mut OwnedReadHalf) -> Result<Option<Experi
                 return Ok(Some(config));
             }
             Message::Control(ControlMessage::Shutdown) => {
-                debug!("Shutdown signal received while waiting for config");
+                debug!("Shutdown received while waiting for config");
                 return Ok(None);
             }
             msg => {
-                warn!("Waiting for config, ignored unexpected message: {:?}", msg);
+                warn!("Waiting for config, ignored: {msg:?}",);
             }
         }
     }
 }
 
 /// # Errors
-pub async fn wait_for_start(reader: &mut OwnedReadHalf) -> Result<()> {
+pub async fn wait_for_start(reader: &mut OwnedReadHalf) -> Result<bool> {
     loop {
         match read_message(reader).await? {
             Message::Control(ControlMessage::BeginExperiment) => {
-                info!("Received start signal from controller");
-                return Ok(());
+                info!("Received BeginExperiment signal");
+                return Ok(true);
             }
             Message::Control(ControlMessage::Shutdown) => {
-                return Err(anyhow::anyhow!("Shutdown signal received while waiting for start"));
+                info!("Shutdown received while waiting for start");
+                return Ok(false);
             }
             msg => {
-                warn!("Waiting for start, ignored unexpected message: {:?}", msg);
+                warn!("Waiting for start, ignored: {msg:?}",);
             }
         }
     }
+}
+
+/// # Errors
+pub async fn signal_ready(writer: &mpsc::Sender<Message>) -> Result<()> {
+    writer
+        .send(Message::Control(ControlMessage::ReadyToStart))
+        .await
+        .map_err(|_| anyhow::anyhow!("Failed to send ReadyToStart"))?;
+    Ok(())
 }
