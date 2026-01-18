@@ -139,7 +139,11 @@ pub async fn execute(
                 ImageCodecKind::PngLossless,
             ],
             tiers: vec![Tier::T1, Tier::T2, Tier::T3],
-            resolutions: vec![ImageResolutionType::FHD, ImageResolutionType::HD],
+            resolutions: vec![
+                ImageResolutionType::FHD,
+                ImageResolutionType::HD,
+                ImageResolutionType::Letterbox,
+            ],
             modes,
             duration: 30,
             rsu_count: 3,
