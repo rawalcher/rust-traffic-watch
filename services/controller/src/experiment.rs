@@ -133,7 +133,7 @@ pub async fn execute(
         RunMode::Full => SuiteDefinition {
             name: "full".into(),
             models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10, 20],
+            fps_values: vec![1, 5, 10, 15],
             codecs: vec![
                 ImageCodecKind::JpgLossy,
                 ImageCodecKind::WebpLossy,
@@ -152,7 +152,7 @@ pub async fn execute(
         RunMode::FullFhd => SuiteDefinition {
             name: "full".into(),
             models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10, 20],
+            fps_values: vec![1, 5, 10, 15],
             codecs: vec![
                 ImageCodecKind::JpgLossy,
                 ImageCodecKind::WebpLossy,
@@ -167,7 +167,7 @@ pub async fn execute(
         RunMode::FullHd => SuiteDefinition {
             name: "full".into(),
             models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10, 20],
+            fps_values: vec![1, 5, 10, 15],
             codecs: vec![
                 ImageCodecKind::JpgLossy,
                 ImageCodecKind::WebpLossy,
@@ -182,7 +182,7 @@ pub async fn execute(
         RunMode::FullLetterbox => SuiteDefinition {
             name: "full".into(),
             models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10, 20],
+            fps_values: vec![1, 5, 10, 15],
             codecs: vec![
                 ImageCodecKind::JpgLossy,
                 ImageCodecKind::WebpLossy,
