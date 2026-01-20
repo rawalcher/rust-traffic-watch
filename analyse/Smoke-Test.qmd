@@ -1,0 +1,86 @@
+---
+title: "Smoke Test Analysis"
+format: pdf
+editor: visual
+---
+
+## Data Loading and Preparation
+
+```{r}
+library(tidyverse)
+library(vroom)
+
+# 1. Loading
+# ---------------------------------------------------------
+files <- list.files("logs/", pattern = "\\.csv$", full.names = TRUE)
+
+df_raw <- vroom(files, id = "filepath", show_col_types = FALSE) %>%
+  mutate(
+    # Extract FPS from filename (assumes format like "test_30fps.csv")
+    fps_target = as.numeric(str_extract(filepath, "\\d+(?=fps)")),
+    run_id = basename(filepath)
+  )
+
+# 2. Aggregation Logic (1 row per Device per Run)
+# ---------------------------------------------------------
+device_performance <- df_raw %>%
+  group_by(run_id, source_device) %>%
+  summarise(
+    # Metadata: use first() because these are constant within a run
+    mode           = first(mode),
+    model_name     = first(model_name),
+    codec          = first(codec),
+    tier           = first(tier),
+    resolution     = first(resolution),
+    fps_target     = first(fps_target),
+    
+    # Metrics
+    actual_count   = n(),
+    # Expected: FPS * 30 seconds (per device)
+    expected_count = first(fps_target) * 30, 
+    drop_rate      = pmax(0, 1 - (actual_count / expected_count)),
+    avg_latency_ms = mean(total_latency_us, na.rm = TRUE) / 1000,
+    sd_latency_ms  = sd(total_latency_us, na.rm = TRUE) / 1000,
+    avg_detections = mean(detection_count, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 3. Mode Comparison (Local vs Offload)
+# ---------------------------------------------------------
+# We average the device metrics to get a run-level comparison
+mode_comparison <- device_performance %>%
+  group_by(model_name, codec, tier, resolution, fps_target, mode) %>%
+  summarise(
+    mean_lat = mean(avg_latency_ms, na.rm = TRUE),
+    mean_drop = mean(drop_rate, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = mode, 
+    values_from = c(mean_lat, mean_drop)
+  ) %>%
+  mutate(
+    latency_improvement = mean_lat_Local - mean_lat_Offload,
+    drop_reduction = mean_drop_Local - mean_drop_Offload
+  )
+
+# 4. Statistical Impact Analysis
+# ---------------------------------------------------------
+# Now we can see if source_device itself is a significant factor
+model <- lm(avg_latency_ms ~ mode + resolution + codec + source_device + fps_target, 
+            data = device_performance)
+
+summary(model)
+
+# 5. Quick Verification
+# ---------------------------------------------------------
+# Check that we actually have 3 rows per run_id
+run_counts <- device_performance %>% 
+  count(run_id) 
+
+print(head(run_counts))
+```
+
+```{r}
+
+```
