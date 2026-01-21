@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         info!("Connecting to controller at {}...", controller_address());
 
-        match service::run_single_experiment(device_id).await {
+        match service::run(device_id).await {
             Ok(()) => {
                 info!("Experiment completed successfully");
             }

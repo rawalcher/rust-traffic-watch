@@ -76,14 +76,12 @@ impl StreamingCsvWriter {
         let t = &result.timing;
         let i = &result.inference;
 
-        let mode = if t.mode.is_some() { t.mode_str() } else { config.mode.to_string() };
-
         self.writer.write_record(&[
             // Identifiers
             t.sequence_id.to_string(),
             t.frame_number.to_string(),
-            t.source_device.clone(),
-            mode,
+            t.source_device.to_string(),
+            t.mode.to_string(),
             // Raw timestamps
             opt_str(t.controller_sent_pulse),
             opt_str(t.capture_start),

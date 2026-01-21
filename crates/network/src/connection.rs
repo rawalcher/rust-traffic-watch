@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
+use crate::framing::{read_message, spawn_writer};
 use anyhow::Result;
+use protocol::config::controller_address;
 use protocol::types::ExperimentConfig;
 use protocol::{ControlMessage, DeviceId, Message};
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
-
-use crate::framing::{read_message, spawn_writer};
 
 pub struct ConnectedDevice {
     pub id: DeviceId,
@@ -211,4 +211,29 @@ pub async fn signal_ready(writer: &mpsc::Sender<Message>) -> Result<()> {
         .await
         .map_err(|_| anyhow::anyhow!("Failed to send ReadyToStart"))?;
     Ok(())
+}
+
+// Add this function
+/// Establish connection to controller, send Hello, wait for config
+/// # Errors
+pub async fn establish_controller_connection(
+    device_id: DeviceId,
+) -> Result<(OwnedReadHalf, mpsc::Sender<Message>, ExperimentConfig)> {
+    let stream = TcpStream::connect(controller_address()).await?;
+    let (mut reader, writer) = stream.into_split();
+    let tx = spawn_writer(writer, 64);
+
+    tx.send(Message::Hello(device_id)).await?;
+    info!("Connected to controller, sent Hello");
+
+    let config = wait_for_config(&mut reader)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Received shutdown before config"))?;
+
+    info!(
+        "Config received: mode={:?}, model={}, fps={}",
+        config.mode, config.model_name, config.fixed_fps
+    );
+
+    Ok((reader, tx, config))
 }

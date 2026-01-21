@@ -62,12 +62,12 @@ pub struct InferenceResult {
     pub experiment_mode: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimingMetadata {
     pub sequence_id: u64,
     pub frame_number: u64,
-    pub source_device: String,
-    pub mode: Option<ExperimentMode>,
+    pub source_device: DeviceId,
+    pub mode: ExperimentMode,
 
     // Controller timestamps
     pub controller_sent_pulse: Option<u64>,
@@ -88,18 +88,39 @@ pub struct TimingMetadata {
 
 impl TimingMetadata {
     #[must_use]
-    pub fn new_with_mode(sequence_id: u64, frame_number: u64, mode: ExperimentMode) -> Self {
-        Self { sequence_id, frame_number, mode: Some(mode), ..Default::default() }
+    pub const fn new_with_mode(
+        device_id: DeviceId,
+        sequence_id: u64,
+        frame_number: u64,
+        mode: ExperimentMode,
+    ) -> Self {
+        Self {
+            // no default bc of device_id
+            source_device: device_id,
+            sequence_id,
+            frame_number,
+            mode,
+            controller_sent_pulse: None,
+            controller_received: None,
+            capture_start: None,
+            encode_complete: None,
+            send_start: None,
+            receive_start: None,
+            queued_for_inference: None,
+            inference_start: None,
+            inference_complete: None,
+            send_result: None,
+        }
     }
 
     #[must_use]
     pub const fn is_local_mode(&self) -> bool {
-        matches!(self.mode, Some(ExperimentMode::Local))
+        matches!(self.mode, ExperimentMode::Local)
     }
 
     #[must_use]
     pub const fn is_remote_mode(&self) -> bool {
-        matches!(self.mode, Some(ExperimentMode::Offload))
+        matches!(self.mode, ExperimentMode::Offload)
     }
 
     #[must_use]
@@ -162,11 +183,6 @@ impl TimingMetadata {
             (Some(start), Some(end)) => Some(end.saturating_sub(start)),
             _ => None,
         }
-    }
-
-    #[must_use]
-    pub fn mode_str(&self) -> String {
-        self.mode.as_ref().map_or_else(|| "Unknown".to_string(), ToString::to_string)
     }
 }
 

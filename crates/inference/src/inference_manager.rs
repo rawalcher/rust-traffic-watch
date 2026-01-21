@@ -141,8 +141,9 @@ impl InferenceManager {
         self.inference_task = Some(task);
     }
 
-    pub async fn update_pending_frame(&self, device_id: DeviceId, mut frame: FrameMessage) {
+    pub async fn update_pending_frame(&self, mut frame: FrameMessage) {
         let seq = frame.sequence_id;
+        let device_id = frame.timing.source_device;
         tracing::debug!("update_pending_frame: device={device_id:?} seq={seq}");
         // if it fails, we throw the frame away anyway
         frame.timing.queued_for_inference = Some(current_timestamp_micros());
