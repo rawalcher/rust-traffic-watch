@@ -1,6 +1,6 @@
 use crate::persistent::PersistentOnnxDetector;
 use protocol::types::ExperimentConfig;
-use protocol::{DeviceId, FrameMessage, InferenceMessage};
+use protocol::{current_timestamp_micros, DeviceId, FrameMessage, InferenceMessage};
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -141,9 +141,11 @@ impl InferenceManager {
         self.inference_task = Some(task);
     }
 
-    pub async fn update_pending_frame(&self, device_id: DeviceId, frame: FrameMessage) {
+    pub async fn update_pending_frame(&self, device_id: DeviceId, mut frame: FrameMessage) {
         let seq = frame.sequence_id;
         tracing::debug!("update_pending_frame: device={device_id:?} seq={seq}");
+        // if it fails, we throw the frame away anyway
+        frame.timing.queued_for_inference = Some(current_timestamp_micros());
         {
             let mut pending = self.pending_frames.lock().await;
             if let Some(old) = pending.insert(device_id, frame) {

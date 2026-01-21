@@ -47,7 +47,8 @@ impl StreamingCsvWriter {
             "total_latency_us",
             "rsu_overhead_us",
             "network_latency_us",
-            "zp_overhead_us",
+            "zp_processing_us",
+            "zp_queueing_us",
             "inference_time_us",
             // Detection metadata
             "frame_size_bytes",
@@ -97,7 +98,8 @@ impl StreamingCsvWriter {
             opt_str(t.total_latency()),
             opt_str(t.rsu_overhead()),
             opt_str(t.network_latency()),
-            opt_str(t.zp_overhead()),
+            opt_str(t.zp_processing()),
+            opt_str(t.zp_queueing()),
             opt_str(t.inference_time()),
             // Detection metadata
             i.frame_size_bytes.to_string(),

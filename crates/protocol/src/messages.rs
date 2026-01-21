@@ -80,6 +80,7 @@ pub struct TimingMetadata {
 
     // Zone Processor (ZP) timestamps - only for remote mode
     pub receive_start: Option<u64>,
+    pub queued_for_inference: Option<u64>,
     pub inference_start: Option<u64>,
     pub inference_complete: Option<u64>,
     pub send_result: Option<u64>,
@@ -123,20 +124,34 @@ impl TimingMetadata {
             return None;
         }
 
-        match (self.send_start, self.receive_start) {
-            (Some(send), Some(recv)) => Some(recv.saturating_sub(send)),
+        match (self.total_latency(), self.rsu_overhead(), self.zp_processing(), self.zp_queueing())
+        {
+            (Some(total), Some(rsu), Some(zp_processing), Some(zp_queue)) => Some(
+                total.saturating_sub(rsu).saturating_sub(zp_processing).saturating_sub(zp_queue),
+            ),
             _ => None,
         }
     }
 
     #[must_use]
-    pub const fn zp_overhead(&self) -> Option<u64> {
+    pub const fn zp_processing(&self) -> Option<u64> {
         if self.is_local_mode() {
             return None;
         }
 
         match (self.receive_start, self.send_result) {
             (Some(recv), Some(send)) => Some(send.saturating_sub(recv)),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn zp_queueing(&self) -> Option<u64> {
+        if self.is_local_mode() {
+            return None;
+        }
+        match (self.queued_for_inference, self.receive_start) {
+            (Some(queued), Some(start)) => Some(start.saturating_sub(queued)),
             _ => None,
         }
     }
