@@ -53,8 +53,6 @@ impl StreamingCsvWriter {
             // Detection metadata
             "frame_size_bytes",
             "detection_count",
-            "image_width",
-            "image_height",
             "model_name",
             // Experiment configuration
             "codec",
@@ -71,10 +69,10 @@ impl StreamingCsvWriter {
     pub fn write_result(
         &mut self,
         result: &InferenceMessage,
-        config: &ExperimentConfig,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let t = &result.timing;
         let i = &result.inference;
+        let f = &result.encoding_spec;
 
         self.writer.write_record(&[
             // Identifiers
@@ -102,13 +100,11 @@ impl StreamingCsvWriter {
             // Detection metadata
             i.frame_size_bytes.to_string(),
             i.detection_count.to_string(),
-            i.image_width.to_string(),
-            i.image_height.to_string(),
             i.model_name.clone(),
             // Experiment configuration
-            format!("{:?}", config.encoding_spec.codec),
-            format!("{:?}", config.encoding_spec.tier),
-            format!("{:?}", config.encoding_spec.resolution),
+            f.codec.to_string(),
+            f.tier.to_string(),
+            f.resolution.to_string(),
         ])?;
 
         self.count += 1;
@@ -149,7 +145,7 @@ impl ConcurrentCsvWriter {
         &self,
         result: &InferenceMessage,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.inner.lock().await.write_result(result, &self.config)
+        self.inner.lock().await.write_result(result)
     }
 
     pub async fn count(&self) -> usize {

@@ -55,11 +55,18 @@ fn start_inference(
     result_tx: mpsc::UnboundedSender<InferenceMessage>,
     config: &protocol::types::ExperimentConfig,
 ) {
-    manager.start_inference(result_tx, config.clone(), move |mut frame, detector, _cfg| {
+    manager.start_inference(result_tx, config.clone(), move |mut frame, detector, cfg| {
         frame.timing.receive_start = Some(current_timestamp_micros());
         let inference = perform_onnx_inference_with_counts(&mut frame, detector)?;
+        let encoding_spec = cfg.encoding_spec.clone();
+
         frame.timing.send_result = Some(current_timestamp_micros());
-        Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
+        Ok(InferenceMessage {
+            sequence_id: frame.sequence_id,
+            inference,
+            encoding_spec,
+            timing: frame.timing,
+        })
     });
 }
 

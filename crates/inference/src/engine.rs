@@ -93,8 +93,6 @@ impl OnnxDetector {
             frame_size_bytes: u32::try_from(image_bytes.len())?,
             detection_count: u32::try_from(detections.len())?,
             detections,
-            image_width: original_width,
-            image_height: original_height,
             model_name: self.model_name.clone(),
             experiment_mode: "default".into(),
         })

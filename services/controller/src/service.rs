@@ -277,6 +277,7 @@ async fn send_pulses(connections: &ExperimentConnections, config: &ExperimentCon
     expected_results
 }
 
+#[allow(clippy::cast_precision_loss)]
 async fn wait_for_results(
     csv_writer: &ConcurrentCsvWriter,
     expected_results: u64,

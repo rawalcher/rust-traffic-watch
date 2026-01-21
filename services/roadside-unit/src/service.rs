@@ -40,10 +40,17 @@ async fn run_local_experiment(
 
     let (result_tx, result_rx) = mpsc::unbounded_channel::<InferenceMessage>();
 
-    manager.start_inference(result_tx, config.clone(), move |mut frame, detector, _cfg| {
+    manager.start_inference(result_tx, config.clone(), move |mut frame, detector, cfg| {
         let inference = perform_onnx_inference_with_counts(&mut frame, detector)?;
+        let encoding_spec = cfg.encoding_spec.clone();
+
         frame.timing.send_start = Some(current_timestamp_micros());
-        Ok(InferenceMessage { sequence_id: frame.sequence_id, timing: frame.timing, inference })
+        Ok(InferenceMessage {
+            sequence_id: frame.sequence_id,
+            inference,
+            encoding_spec,
+            timing: frame.timing,
+        })
     });
 
     signal_ready(&ctrl_tx).await?;

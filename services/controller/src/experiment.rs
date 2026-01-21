@@ -38,10 +38,6 @@ pub enum RunMode {
 
     /// Full comprehensive suite: all models, all codecs, all tiers, all resolutions, 3 RSUs
     Full,
-
-    FullHd,
-    FullFhd,
-    FullLetterbox,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -145,51 +141,6 @@ pub async fn execute(
                 ImageResolutionType::HD,
                 ImageResolutionType::Letterbox,
             ],
-            modes,
-            duration: 30,
-            rsu_count: 3,
-        },
-        RunMode::FullFhd => SuiteDefinition {
-            name: "full".into(),
-            models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10, 15],
-            codecs: vec![
-                ImageCodecKind::JpgLossy,
-                ImageCodecKind::WebpLossy,
-                ImageCodecKind::PngLossless,
-            ],
-            tiers: vec![Tier::T1, Tier::T2, Tier::T3],
-            resolutions: vec![ImageResolutionType::FHD],
-            modes,
-            duration: 30,
-            rsu_count: 3,
-        },
-        RunMode::FullHd => SuiteDefinition {
-            name: "full".into(),
-            models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10, 15],
-            codecs: vec![
-                ImageCodecKind::JpgLossy,
-                ImageCodecKind::WebpLossy,
-                ImageCodecKind::PngLossless,
-            ],
-            tiers: vec![Tier::T1, Tier::T2, Tier::T3],
-            resolutions: vec![ImageResolutionType::HD],
-            modes,
-            duration: 30,
-            rsu_count: 3,
-        },
-        RunMode::FullLetterbox => SuiteDefinition {
-            name: "full".into(),
-            models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
-            fps_values: vec![1, 5, 10, 15],
-            codecs: vec![
-                ImageCodecKind::JpgLossy,
-                ImageCodecKind::WebpLossy,
-                ImageCodecKind::PngLossless,
-            ],
-            tiers: vec![Tier::T1, Tier::T2, Tier::T3],
-            resolutions: vec![ImageResolutionType::Letterbox],
             modes,
             duration: 30,
             rsu_count: 3,

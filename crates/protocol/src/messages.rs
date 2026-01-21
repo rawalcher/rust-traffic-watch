@@ -1,4 +1,4 @@
-use crate::types::{Detection, ExperimentConfig, ExperimentMode, Frame};
+use crate::types::{Detection, EncodingSpec, ExperimentConfig, ExperimentMode, Frame};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,6 +46,7 @@ pub struct FrameMessage {
 pub struct InferenceMessage {
     pub sequence_id: u64,
     pub inference: InferenceResult,
+    pub encoding_spec: EncodingSpec,
     pub timing: TimingMetadata,
 }
 
@@ -56,8 +57,6 @@ pub struct InferenceResult {
     pub processing_time_us: u64,
     pub frame_size_bytes: u32,
     pub detection_count: u32,
-    pub image_width: u32,
-    pub image_height: u32,
     pub model_name: String,
     pub experiment_mode: String,
 }
