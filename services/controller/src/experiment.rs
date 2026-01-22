@@ -133,7 +133,7 @@ pub async fn execute(
                 ImageResolutionType::Letterbox,
             ],
             modes,
-            duration: 30,
+            duration: 60,
             rsu_count: 3,
         },
         RunMode::Custom(a) => SuiteDefinition {
