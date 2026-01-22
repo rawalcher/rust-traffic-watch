@@ -1,3 +1,5 @@
+// services/controller/src/experiment.rs
+
 use clap::{Args, Parser, Subcommand};
 use std::error::Error;
 use tokio::time::{sleep, Duration, Instant};
@@ -30,14 +32,14 @@ pub enum RunMode {
     /// Run a single specific model and FPS configuration
     Single(SingleArgs),
 
-    /// Run a full automated test suite with custom parameters
-    Suite(SuiteArgs),
-
     /// Predefined fast test
     Quick,
 
     /// Full comprehensive suite: all models, all codecs, all tiers, all resolutions, 3 RSUs
     Full,
+
+    /// Custom comprehensive test with specified parameters (all codecs, tiers, resolutions)
+    Custom(CustomArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -56,18 +58,18 @@ pub struct SingleArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-pub struct SuiteArgs {
-    #[arg(long, value_delimiter = ',', default_values = &["yolov5n", "yolov5s", "yolov5m"])]
-    pub models: Vec<String>,
+pub struct CustomArgs {
+    #[arg(long, default_value = "yolov5n")]
+    pub model: String,
 
-    #[arg(long, value_delimiter = ',', default_values = &["1", "5", "10"])]
-    pub fps_values: Vec<u64>,
+    #[arg(long, default_value_t = 15)]
+    pub fps: u64,
 
-    #[arg(long, default_value_t = DEFAULT_DURATION_SECONDS)]
-    pub duration: u64,
-
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 3)]
     pub rsu_count: u8,
+
+    #[arg(long, default_value_t = 60)]
+    pub duration: u64,
 }
 
 struct SuiteDefinition {
@@ -115,17 +117,6 @@ pub async fn execute(
             duration: 10,
             rsu_count: 2,
         },
-        RunMode::Suite(a) => SuiteDefinition {
-            name: "suite".into(),
-            models: a.models,
-            fps_values: a.fps_values,
-            codecs: vec![ImageCodecKind::JpgLossy],
-            tiers: vec![Tier::T2],
-            resolutions: vec![ImageResolutionType::FHD],
-            modes,
-            duration: a.duration,
-            rsu_count: a.rsu_count,
-        },
         RunMode::Full => SuiteDefinition {
             name: "full".into(),
             models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
@@ -144,6 +135,26 @@ pub async fn execute(
             modes,
             duration: 30,
             rsu_count: 3,
+        },
+        RunMode::Custom(a) => SuiteDefinition {
+            name: "custom".into(),
+            models: vec![a.model],
+            fps_values: vec![a.fps],
+            codecs: vec![
+                ImageCodecKind::JpgLossy,
+                ImageCodecKind::WebpLossy,
+                ImageCodecKind::WebpLossless,
+                ImageCodecKind::PngLossless,
+            ],
+            tiers: vec![Tier::T1, Tier::T2, Tier::T3],
+            resolutions: vec![
+                ImageResolutionType::FHD,
+                ImageResolutionType::HD,
+                ImageResolutionType::Letterbox,
+            ],
+            modes,
+            duration: a.duration,
+            rsu_count: a.rsu_count,
         },
     };
 
