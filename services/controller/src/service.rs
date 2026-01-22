@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -92,12 +91,6 @@ impl ControllerHarness {
 impl Default for ControllerHarness {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Clone for ConcurrentCsvWriter {
-    fn clone(&self) -> Self {
-        Self { inner: Arc::clone(&self.inner), config: self.config.clone() }
     }
 }
 

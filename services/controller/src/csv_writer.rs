@@ -74,7 +74,7 @@ impl StreamingCsvWriter {
         let i = &result.inference;
         let f = &result.encoding_spec;
 
-        self.writer.write_record(&[
+        let record = vec![
             // Identifiers
             t.sequence_id.to_string(),
             t.frame_number.to_string(),
@@ -105,11 +105,12 @@ impl StreamingCsvWriter {
             f.codec.to_string(),
             f.tier.to_string(),
             f.resolution.to_string(),
-        ])?;
+        ];
 
+        self.writer.write_record(&record)?;
         self.count += 1;
 
-        if self.count.is_multiple_of(10) {
+        if self.count.is_multiple_of(5) {
             self.writer.flush()?;
         }
 
@@ -157,5 +158,11 @@ impl ConcurrentCsvWriter {
             .map_err(|_| "Cannot finalize: writer still has outstanding references")?
             .into_inner();
         writer.finalize()
+    }
+}
+
+impl Clone for ConcurrentCsvWriter {
+    fn clone(&self) -> Self {
+        Self { inner: Arc::clone(&self.inner), config: self.config.clone() }
     }
 }

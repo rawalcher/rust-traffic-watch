@@ -28,13 +28,17 @@ pub async fn run(device_id: DeviceId) -> Result<(), Box<dyn Error + Send + Sync>
 
     let manager = Arc::new(Mutex::new(manager));
 
-    let rsu_handles = accept_all_rsus(&config, Arc::clone(&manager)).await?;
+    let (shutdown_rsu_tx, shutdown_rsu_rx) = tokio::sync::broadcast::channel::<()>(16);
+
+    let rsu_handles = accept_all_rsus(&config, Arc::clone(&manager), shutdown_rsu_rx).await?;
 
     signal_ready(&ctrl_tx).await?;
     info!("Signaled ready to controller");
 
     if !wait_for_start(&mut ctrl_reader).await? {
         info!("Received shutdown before start");
+        let _ = shutdown_rsu_tx.send(());
+        cleanup_rsu_handlers(rsu_handles).await;
         shutdown_manager(manager).await;
         return Ok(());
     }
@@ -42,6 +46,9 @@ pub async fn run(device_id: DeviceId) -> Result<(), Box<dyn Error + Send + Sync>
     info!("Experiment started - processing frames");
 
     process_experiment_loop(ctrl_reader, ctrl_tx, result_rx).await;
+
+    info!("Signaling all RSU handlers to stop");
+    let _ = shutdown_rsu_tx.send(());
 
     cleanup_rsu_handlers(rsu_handles).await;
     shutdown_manager(manager).await;
@@ -73,6 +80,7 @@ fn start_inference(
 async fn accept_all_rsus(
     config: &protocol::types::ExperimentConfig,
     manager: Arc<Mutex<InferenceManager>>,
+    shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> Result<Vec<JoinHandle<()>>, Box<dyn Error + Send + Sync>> {
     let bind_addr = zone_processor_bind_address();
     info!("Listening for RSUs on {}", bind_addr);
@@ -97,7 +105,8 @@ async fn accept_all_rsus(
             }
         };
 
-        let handle = spawn_rsu_handler(rsu_stream, rsu_id, Arc::clone(&manager));
+        let handle =
+            spawn_rsu_handler(rsu_stream, rsu_id, Arc::clone(&manager), shutdown_rx.resubscribe());
         rsu_handles.push(handle);
         connected_count += 1;
     }
@@ -112,28 +121,40 @@ fn spawn_rsu_handler(
     rsu_stream: TcpStream,
     rsu_id: DeviceId,
     manager: Arc<Mutex<InferenceManager>>,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let (mut reader, _writer) = rsu_stream.into_split();
 
         loop {
-            match read_message(&mut reader).await {
-                Ok(Message::Frame(frame)) => {
-                    manager.lock().await.update_pending_frame(frame).await;
-                }
-                Ok(Message::Control(ControlMessage::Shutdown)) => {
-                    info!("RSU {} sent shutdown", rsu_id);
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    info!("RSU {} handler received shutdown signal", rsu_id);
                     break;
                 }
-                Ok(other) => {
-                    debug!("RSU {} sent unexpected: {:?}", rsu_id, other);
-                }
-                Err(e) => {
-                    debug!("RSU {} disconnected: {}", rsu_id, e);
-                    break;
+
+                msg = read_message(&mut reader) => {
+                    match msg {
+                        Ok(Message::Frame(frame)) => {
+                            manager.lock().await.update_pending_frame(frame).await;
+                        }
+                        Ok(Message::Control(ControlMessage::Shutdown)) => {
+                            info!("RSU {} sent shutdown", rsu_id);
+                            break;
+                        }
+                        Ok(other) => {
+                            debug!("RSU {} sent unexpected: {:?}", rsu_id, other);
+                        }
+                        Err(e) => {
+                            debug!("RSU {} disconnected: {}", rsu_id, e);
+                            break;
+                        }
+                    }
                 }
             }
         }
+
+        info!("RSU {} handler stopped", rsu_id);
     })
 }
 

@@ -32,11 +32,12 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="fix: logic error in config creation">
-      <change afterPath="$PROJECT_DIR$/analyse/temp.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="f2320041-5297-4fe8-aeac-99920931173d" name="Changes" comment="refactor: remove image_width, image_height. add encoding_spec to result">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/crates/protocol/src/config.rs" beforeDir="false" afterPath="$PROJECT_DIR$/crates/protocol/src/config.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/csv_writer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/csv_writer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/controller/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/controller/src/service.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/services/zone-processor/src/service.rs" beforeDir="false" afterPath="$PROJECT_DIR$/services/zone-processor/src/service.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -139,7 +140,7 @@
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
     &quot;org.rust.cargo.project.model.PROJECT_DISCOVERY&quot;: &quot;true&quot;,
     &quot;org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon&quot;: &quot;&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;editor.reader.mode&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
@@ -188,31 +189,11 @@
       <workItem from="1768743019875" duration="1176000" />
       <workItem from="1768748092368" duration="1950000" />
       <workItem from="1768759441139" duration="1387000" />
-      <workItem from="1768945149321" duration="185000" />
-    </task>
-    <task id="LOCAL-00001" summary="streamlined controller, cleaned up general flow + clippy pedantic">
-      <option name="closed" value="true" />
-      <created>1764620551911</created>
-      <option name="number" value="00001" />
-      <option name="presentableId" value="LOCAL-00001" />
-      <option name="project" value="LOCAL" />
-      <updated>1764620551911</updated>
-    </task>
-    <task id="LOCAL-00002" summary="streamlined constants">
-      <option name="closed" value="true" />
-      <created>1764621685676</created>
-      <option name="number" value="00002" />
-      <option name="presentableId" value="LOCAL-00002" />
-      <option name="project" value="LOCAL" />
-      <updated>1764621685676</updated>
-    </task>
-    <task id="LOCAL-00003" summary="last config file refactoring, pinky promise">
-      <option name="closed" value="true" />
-      <created>1764626259020</created>
-      <option name="number" value="00003" />
-      <option name="presentableId" value="LOCAL-00003" />
-      <option name="project" value="LOCAL" />
-      <updated>1764626259020</updated>
+      <workItem from="1768945149321" duration="341000" />
+      <workItem from="1769023015185" duration="14493000" />
+      <workItem from="1769039603516" duration="87000" />
+      <workItem from="1769039799838" duration="55000" />
+      <workItem from="1769086980965" duration="2485000" />
     </task>
     <task id="LOCAL-00004" summary="optimized imports, added run configurations for build, clippy and preprocessing frames">
       <option name="closed" value="true" />
@@ -558,7 +539,55 @@
       <option name="project" value="LOCAL" />
       <updated>1768743469056</updated>
     </task>
-    <option name="localTasksCounter" value="47" />
+    <task id="LOCAL-00047" summary="feat: initial analysis">
+      <option name="closed" value="true" />
+      <created>1768945474118</created>
+      <option name="number" value="00047" />
+      <option name="presentableId" value="LOCAL-00047" />
+      <option name="project" value="LOCAL" />
+      <updated>1768945474118</updated>
+    </task>
+    <task id="LOCAL-00048" summary="feat(logging): add timestamp to measure queueing times">
+      <option name="closed" value="true" />
+      <created>1769027647094</created>
+      <option name="number" value="00048" />
+      <option name="presentableId" value="LOCAL-00048" />
+      <option name="project" value="LOCAL" />
+      <updated>1769027647094</updated>
+    </task>
+    <task id="LOCAL-00049" summary="refactor: refactor methods since too long&#10;&#10;- change deviceId away from String">
+      <option name="closed" value="true" />
+      <created>1769036420274</created>
+      <option name="number" value="00049" />
+      <option name="presentableId" value="LOCAL-00049" />
+      <option name="project" value="LOCAL" />
+      <updated>1769036420274</updated>
+    </task>
+    <task id="LOCAL-00050" summary="refactor: refactor methods since too long&#10;&#10;- change deviceId away from String">
+      <option name="closed" value="true" />
+      <created>1769036474310</created>
+      <option name="number" value="00050" />
+      <option name="presentableId" value="LOCAL-00050" />
+      <option name="project" value="LOCAL" />
+      <updated>1769036474311</updated>
+    </task>
+    <task id="LOCAL-00051" summary="refactor: refactor methods since too long&#10;&#10;- change deviceId away from String">
+      <option name="closed" value="true" />
+      <created>1769036520908</created>
+      <option name="number" value="00051" />
+      <option name="presentableId" value="LOCAL-00051" />
+      <option name="project" value="LOCAL" />
+      <updated>1769036520908</updated>
+    </task>
+    <task id="LOCAL-00052" summary="refactor: remove image_width, image_height. add encoding_spec to result">
+      <option name="closed" value="true" />
+      <created>1769039320093</created>
+      <option name="number" value="00052" />
+      <option name="presentableId" value="LOCAL-00052" />
+      <option name="project" value="LOCAL" />
+      <updated>1769039320093</updated>
+    </task>
+    <option name="localTasksCounter" value="53" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -591,10 +620,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="feat(zone-processor): better error handling for RSU tasks" />
-    <MESSAGE value="fix(zone-processor): better edge case handling" />
-    <MESSAGE value="refactor: apply clippy suggestions" />
-    <MESSAGE value="chore: update ip of roadside-unit" />
     <MESSAGE value="chore: update ip for experiment" />
     <MESSAGE value="fix: actually use the fps and duration in suite mode" />
     <MESSAGE value="fix: pass --release flag to preprocessor" />
@@ -616,7 +641,11 @@
     <MESSAGE value="fix: add letterbox to full suite" />
     <MESSAGE value="feat: add full setup for each resolution" />
     <MESSAGE value="fix: logic error in config creation" />
-    <option name="LAST_COMMIT_MESSAGE" value="fix: logic error in config creation" />
+    <MESSAGE value="feat: initial analysis" />
+    <MESSAGE value="feat(logging): add timestamp to measure queueing times" />
+    <MESSAGE value="refactor: refactor methods since too long&#10;&#10;- change deviceId away from String" />
+    <MESSAGE value="refactor: remove image_width, image_height. add encoding_spec to result" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor: remove image_width, image_height. add encoding_spec to result" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
