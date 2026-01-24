@@ -143,7 +143,6 @@ pub async fn execute(
             codecs: vec![
                 ImageCodecKind::JpgLossy,
                 ImageCodecKind::WebpLossy,
-                ImageCodecKind::WebpLossless,
                 ImageCodecKind::PngLossless,
             ],
             tiers: vec![Tier::T1, Tier::T2, Tier::T3],

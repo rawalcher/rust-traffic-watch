@@ -265,6 +265,12 @@ async fn send_pulses(connections: &ExperimentConnections, config: &ExperimentCon
         sleep(pulse_interval).await;
     }
 
+    info!(
+        "PULSE PHASE ENDED elapsed={}s, sent {} sequences",
+        start.elapsed().as_secs(),
+        sequence_id
+    );
+
     expected_results
 }
 

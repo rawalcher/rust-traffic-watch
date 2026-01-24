@@ -29,8 +29,8 @@ impl OnnxDetector {
         let model_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
 
         let session = Session::builder()?
-            .with_intra_threads(4)?
-            .with_inter_threads(2)?
+            .with_intra_threads(2)?
+            .with_inter_threads(1)?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)?
             .commit_from_file(path)?;
 

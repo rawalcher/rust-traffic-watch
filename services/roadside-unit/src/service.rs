@@ -195,6 +195,7 @@ async fn process_offload_loop(
     loop {
         match read_message(&mut ctrl_reader).await {
             Ok(Message::Pulse(timing)) => {
+                info!("RSU received pulse seq={}", timing.sequence_id);
                 if let Err(e) = handle_pulse_offload(timing, &config, &zp_tx).await {
                     error!("Failed to handle pulse: {}", e);
                 }
