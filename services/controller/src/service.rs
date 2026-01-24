@@ -18,8 +18,6 @@ use protocol::{
 
 pub struct ControllerHarness;
 
-const MAX_WAIT: Duration = Duration::from_secs(10);
-
 impl ControllerHarness {
     #[must_use]
     pub const fn new() -> Self {
@@ -277,24 +275,27 @@ async fn wait_for_results(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Finished sending {} pulses. Waiting for results...", expected_results);
 
-    let wait_start = Instant::now();
+    let mut last_count;
 
-    while wait_start.elapsed() < MAX_WAIT {
+    loop {
+        last_count = csv_writer.count().await;
+        sleep(Duration::from_secs(2)).await;
+
         let current_count = csv_writer.count().await;
-        if current_count >= usize::try_from(expected_results)? {
-            info!("All {} results received!", current_count);
-            return Ok(());
+        if current_count == last_count {
+            info!(
+                "Collected {} results out of {} expected ({:.1}%)",
+                current_count,
+                expected_results,
+                (current_count as f64 / expected_results as f64) * 100.0
+            );
+            break;
         }
-        sleep(Duration::from_millis(100)).await;
-    }
 
-    let final_count = csv_writer.count().await;
-    info!(
-        "Collected {} results out of {} expected ({:.1}%)",
-        final_count,
-        expected_results,
-        (final_count as f64 / expected_results as f64) * 100.0
-    );
+        if current_count % 100 == 0 && current_count > 0 {
+            info!("Progress: {} results", current_count);
+        }
+    }
 
     Ok(())
 }
@@ -310,22 +311,22 @@ async fn shutdown_experiment(
 
     drop(result_tx);
 
-    info!("Waiting for device read tasks to complete...");
-    let read_timeout = Duration::from_secs(5);
+    info!("Waiting for result collection task to complete...");
+    match result_task.await {
+        Ok(()) => info!("Result collection task completed"),
+        Err(e) => warn!("Result collection task panicked: {:?}", e),
+    }
 
+    info!("Waiting for device read tasks to complete...");
     for (idx, handle) in read_tasks.into_iter().enumerate() {
-        match timeout(read_timeout, handle).await {
+        match timeout(Duration::from_secs(2), handle).await {
             Ok(Ok(())) => debug!("Read task {} completed", idx),
             Ok(Err(e)) => warn!("Read task {} panicked: {:?}", idx, e),
-            Err(_) => warn!("Read task {} timed out", idx),
+            Err(_) => debug!("Read task {} timed out (expected after shutdown)", idx),
         }
     }
 
-    match timeout(Duration::from_secs(2), result_task).await {
-        Ok(Ok(())) => debug!("Result collection task completed"),
-        Ok(Err(e)) => warn!("Result collection task panicked: {:?}", e),
-        Err(_) => warn!("Result collection task timed out"),
-    }
+    info!("Shutdown complete");
 }
 
 const fn advance_frame(frame: u64, skip: u64) -> u64 {
