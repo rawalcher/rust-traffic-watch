@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated paper below."
+title: "Rust Traffic Watch"
+type: software
+authors:
+  - family-names: Walcher
+    given-names: Raphael
+    affiliation: "University of Klagenfurt"
+repository-code: "https://github.com/rawalcher/rust-traffic-watch"
+license: Apache-2.0
+preferred-citation:
+  type: conference-paper
+  title: "Wi-Fi Enabled Edge Intelligence Framework for Smart City Traffic Monitoring using Low-Power IoT Cameras"
+  authors:
+    - family-names: Walcher
+      given-names: Raphael
+      affiliation: "University of Klagenfurt, Institute of Information Technology"
+    - family-names: Horvath
+      given-names: Kurt
+      affiliation: "Institute of Information Technology"
+    - family-names: Kimovski
+      given-names: Dragi
+      affiliation: "University of Klagenfurt, Institute of Information Technology"
+    - family-names: Kitanov
+      given-names: Stojan
+      affiliation: "Mother Teresa University, Faculty of Information Sciences"
+  year: 2025
+  collection-title: "Proceedings of the 1st International Workshop on Intelligent and Scalable Systems across the Computing Continuum (ScaleSys 2025)"
+  journal: "IoT Workshop Proceedings"
+  volume: 1
+  issue: 1
+  start: 43
+  end: 49
+  doi: "10.34749/3061-1008.2025.7"
+  issn: "3061-1008"
+  publisher:
+    name: "Institute of Information Systems Engineering, TU Wien"
