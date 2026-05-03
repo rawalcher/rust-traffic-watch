@@ -40,6 +40,9 @@ pub enum RunMode {
 
     /// Custom comprehensive test with specified parameters (all codecs, tiers, resolutions)
     Custom(CustomArgs),
+
+    /// Minimal Testing for last minute results
+    Baseline,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -116,6 +119,17 @@ pub async fn execute(
             modes,
             duration: 10,
             rsu_count: 2,
+        },
+        RunMode::Baseline => SuiteDefinition {
+            name: "baseline_1to1".into(),
+            models: vec!["yolov5n".into(), "yolov5s".into(), "yolov5m".into()],
+            fps_values: vec![1, 5, 10, 15],
+            codecs: vec![ImageCodecKind::JpgLossy],
+            tiers: vec![Tier::T1],
+            resolutions: vec![ImageResolutionType::Letterbox],
+            modes: vec![ExperimentMode::Offload],
+            duration: 60,
+            rsu_count: 1,
         },
         RunMode::Full => SuiteDefinition {
             name: "full".into(),
