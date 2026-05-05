@@ -305,20 +305,26 @@ fig1_offload_single <- ggplot(dfr_offload_phase2_single,
   base_theme
 save_figure(fig1_offload_single, "phase2_dfr_offload_single")
 
-dfr_offload_combined <- bind_rows(
-  dfr_offload_phase2_multi  %>% mutate(ratio = "k = 3"),
-  dfr_offload_phase2_single %>% mutate(ratio = "k = 1")
-) %>%
-  mutate(ratio = factor(ratio, levels = c("k = 1", "k = 3")))
-fig1_offload_combined <- ggplot(dfr_offload_combined,
-    aes(x = fps_numeric, y = dfr, fill = model_label)) +
-  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+fig1_offload_combined <- ggplot() +
+  geom_col(
+    data = dfr_offload_phase2_multi,
+    aes(x = fps_numeric, y = dfr, fill = model_label),
+    position = position_dodge(width = 0.8),
+    width = 0.75, alpha = 0.35
+  ) +
+  geom_col(
+    data = dfr_offload_phase2_single,
+    aes(x = fps_numeric, y = dfr, fill = model_label),
+    position = position_dodge(width = 0.8),
+    width = 0.4, alpha = 1.0
+  ) +
   geom_text(
-    aes(label = sprintf("%.0f%%", dfr)),
+    data = dfr_offload_phase2_single,
+    aes(x = fps_numeric, y = dfr, label = sprintf("%.0f%%", dfr),
+        group = model_label),
     position = position_dodge(width = 0.8),
     vjust = -0.4, size = 2.5
   ) +
-  facet_wrap(~ ratio, ncol = 2) +
   scale_fill_manual(values = model_colors, name = "Model") +
   scale_y_continuous(
     limits = c(0, 105),
@@ -326,7 +332,7 @@ fig1_offload_combined <- ggplot(dfr_offload_combined,
   ) +
   labs(
     title    = "Phase 2: Offloaded Inference",
-    subtitle = "1:k with k=1 vs k=3 | JPEG, Letterbox, Best quality (T1)",
+    subtitle = "JPEG, Letterbox, Best quality (T1) | 1:k with k=1 (solid) vs k=3 (faded)",
     x        = "Target Frame Rate (FPS)",
     y        = "Dropped Frame Rate (%)"
   ) +

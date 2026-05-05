@@ -24,8 +24,6 @@ library(broom)
 library(knitr)
 library(scales)
 
-if (!dir.exists("plots")) dir.create("plots")
-
 theme_set(theme_minimal(base_size = 12) +
   theme(
     plot.title = element_text(face = "bold", size = 16),
@@ -72,7 +70,8 @@ df_raw <- vroom(files_multi, id = "filepath", show_col_types = FALSE) %>%
     model_name = factor(model_name, levels = c("yolov5n", "yolov5s", "yolov5m")),
     resolution = factor(resolution, levels = c("Letterbox", "HD", "FHD")),
     tier = factor(tier, levels = c("T1", "T2", "T3")),
-    fps_target = factor(fps_target, levels = c(1, 5, 10, 15))
+    fps_target = factor(fps_target, levels = c(1, 5, 10, 15)),
+    source_device = paste0("RSU", as.integer(str_extract(source_device, "\\d+")) + 1),
   )
 
 df_single <- vroom(files_single, id = "filepath", show_col_types = FALSE) %>%
@@ -82,7 +81,8 @@ df_single <- vroom(files_single, id = "filepath", show_col_types = FALSE) %>%
     model_name = factor(model_name, levels = c("yolov5n", "yolov5s", "yolov5m")),
     resolution = factor(resolution, levels = c("Letterbox", "HD", "FHD")),
     tier = factor(tier, levels = c("T1", "T2", "T3")),
-    fps_target = factor(fps_target, levels = c(1, 5, 10, 15))
+    fps_target = factor(fps_target, levels = c(1, 5, 10, 15)),
+    source_device = paste0("RSU", as.integer(str_extract(source_device, "\\d+")) + 1),
   )
 
 ```
@@ -184,7 +184,7 @@ heatmap_data <- model_comparison %>%
     label_text = paste0(round(benefit_ms, 0), " ms")
   )
 
-ggplot(heatmap_data, aes(x = fps_target, y = model_name, fill = benefit_ms)) +
+decision_matrix_heatmap <- ggplot(heatmap_data, aes(x = fps_target, y = model_name, fill = benefit_ms)) +
   geom_tile(color = "white", lwd = 0.5) +
   
   geom_text(aes(label = label_text), color = "black", size = 5, fontface = "bold") +
@@ -205,9 +205,15 @@ ggplot(heatmap_data, aes(x = fps_target, y = model_name, fill = benefit_ms)) +
   theme(
     panel.grid = element_blank(),
     plot.title = element_text(face = "bold", size = 16),
-    legend.position = "right",
+    legend.position = "bottom",
+    legend.key.width = unit(3, "cm"),
+    legend.title = element_text(vjust = 0.75),
     axis.text = element_text(size = 12, color = "black")
   )
+
+save_figure(decision_matrix_heatmap, "decision_matrix_heatmap", width = 32, height = 18)
+
+decision_matrix_heatmap
 
 ```
 
@@ -546,7 +552,7 @@ rsu_comparison <- device_perf %>%
     .groups = "drop"
   )
 
-ggplot(rsu_comparison, aes(x = fps_target, y = mean_queue, fill = source_device)) +
+rsu_fairness <- ggplot(rsu_comparison, aes(x = fps_target, y = mean_queue, fill = source_device)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.7) +
   facet_wrap(~model_name) +
   labs(
@@ -557,6 +563,10 @@ ggplot(rsu_comparison, aes(x = fps_target, y = mean_queue, fill = source_device)
     fill = "RSU Device"
   ) +
   theme(legend.position = "right")
+
+save_figure(rsu_fairness, "rsu_fairness", width = 24, height = 12)
+
+rsu_fairness
 
 ```
 
@@ -578,10 +588,10 @@ throughput_data <- device_perf %>%
   group_by(resolution, model_name, target_fps_num) %>%
   summarise(mean_achieved = mean(achieved_fps), .groups = "drop")
 
-ggplot(throughput_data, aes(x = target_fps_num, y = mean_achieved, color = model_name, group = model_name)) +
+system_throughput <- ggplot(throughput_data, aes(x = target_fps_num, y = mean_achieved, color = model_name, group = model_name)) +
   # The "Ideal" Line (x = y)
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
-  annotate("text", x = 12, y = 13, label = "Ideal (No Drops)", color = "gray50", angle = 35) +
+  annotate("text", x = 12, y = 13, label = "Ideal (No Drops)", color = "gray50", angle = 41) +
   
   # The Actual Data
   geom_line(linewidth = 1) +
@@ -599,6 +609,10 @@ ggplot(throughput_data, aes(x = target_fps_num, y = mean_achieved, color = model
     color = "Model"
   ) +
   theme(panel.grid.minor = element_blank())
+
+save_figure(system_throughput, "system_throughput", width = 24, height = 12)
+
+system_throughput
 
 ```
 
