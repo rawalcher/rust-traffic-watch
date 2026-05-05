@@ -1,0 +1,689 @@
+---
+title: "Rust Traffic Watch: Final Assessment"
+subtitle: "Softwarepraktikum"
+author: "Raphael Walcher"
+date: today
+format: 
+  typst:
+    toc: true
+    number-sections: true
+    section-numbering: "1.1.1"
+editor: visual
+execute:
+  warning: false
+  message: false
+  echo: false 
+  dpi: 300
+  fig-format: svg
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(vroom)
+library(broom)
+library(knitr)
+library(scales)
+
+if (!dir.exists("plots")) dir.create("plots")
+
+theme_set(theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    strip.text = element_text(face = "bold", size = 12),
+    legend.position = "bottom",
+    axis.title = element_text(size = 12)
+  ))
+
+mode_colors <- c("Local" = "#2c3e50", "Offload" = "#27ae60")
+model_colors <- c("yolov5n" = "#3498db", "yolov5s" = "#f39c12", "yolov5m" = "#e74c3c")
+
+```
+
+```{=typst}
+#set page(flipped: true)
+#pagebreak()
+```
+# Introduction
+
+This analysis evaluates the performance trade-offs between **local processing** on Raspberry Pi roadside units (RSUs) and **offloading** to a Intel N100 based mini PC (Zone Processor) for real-time traffic monitoring using YOLO object detection.
+
+**Research Question**: Under what conditions does edge offloading reduce end-to-end latency compared to local processing?
+
+## Experimental Parameters
+
+| Parameter       | Values                    | Notes                 |
+|-----------------|---------------------------|-----------------------|
+| Processing Mode | Local, Offload            | Core comparison       |
+| Model           | YOLOv5n, YOLOv5s, YOLOv5m | Increasing complexity |
+| Resolution      | FHD, HD, Letterbox        | Input size            |
+| Codec           | JPEG, PNG, WebP           | Compression method    |
+| FPS Target      | 1, 5, 10, 15              | Frame rate demand     |
+
+```{r data-loading}
+files_multi <- list.files("phase2_logs/multi", pattern = "\\.csv$", full.names = TRUE)
+files_single <- list.files("phase2_logs/single", pattern = "\\.csv$", full.names = TRUE)
+
+
+df_raw <- vroom(files_multi, id = "filepath", show_col_types = FALSE) %>%
+  mutate(
+    fps_target = as.numeric(str_extract(filepath, "\\d+(?=fps)")),
+    run_id = basename(filepath),
+    model_name = factor(model_name, levels = c("yolov5n", "yolov5s", "yolov5m")),
+    resolution = factor(resolution, levels = c("Letterbox", "HD", "FHD")),
+    tier = factor(tier, levels = c("T1", "T2", "T3")),
+    fps_target = factor(fps_target, levels = c(1, 5, 10, 15))
+  )
+
+df_single <- vroom(files_single, id = "filepath", show_col_types = FALSE) %>%
+  mutate(
+    fps_target = as.numeric(str_extract(filepath, "\\d+(?=fps)")),
+    run_id = basename(filepath),
+    model_name = factor(model_name, levels = c("yolov5n", "yolov5s", "yolov5m")),
+    resolution = factor(resolution, levels = c("Letterbox", "HD", "FHD")),
+    tier = factor(tier, levels = c("T1", "T2", "T3")),
+    fps_target = factor(fps_target, levels = c(1, 5, 10, 15))
+  )
+
+```
+
+```{r aggregate-data}
+
+df_clean <- df_raw %>%
+  filter(total_latency_us <= 60000000)
+
+device_perf <- df_clean %>%
+  group_by(run_id, source_device) %>%
+  summarise(
+    mode             = first(mode),
+    model_name       = first(model_name),
+    codec            = first(codec),
+    tier             = first(tier),
+    resolution       = first(resolution),
+    fps_target       = first(fps_target),
+    avg_detections   = mean(detection_count, na.rm = TRUE),
+    total_latency_ms = mean(total_latency_us, na.rm = TRUE) / 1000,
+    rsu_overhead_ms  = mean(rsu_overhead_us, na.rm = TRUE) / 1000,
+    inference_ms     = mean(inference_time_us, na.rm = TRUE) / 1000,
+    network_ms  = if (all(is.na(network_latency_us))) NA_real_ else mean(network_latency_us, na.rm = TRUE) / 1000,
+    queue_ms    = if (all(is.na(zp_queueing_us))) NA_real_ else mean(zp_queueing_us, na.rm = TRUE) / 1000,
+    latency_p95_ms = quantile(total_latency_us, 0.95, na.rm = TRUE) / 1000,
+    frames_received = n(),
+    expected_frames = as.numeric(as.character(first(fps_target))) * 60,
+    drop_rate_pct   = pmax(0, 1 - (frames_received / expected_frames)) * 100,
+    avg_frame_kb    = mean(frame_size_bytes, na.rm = TRUE) / 1024,
+    .groups = "drop"
+  )
+
+device_perf_single <- df_single %>%
+  group_by(run_id, source_device) %>%
+  summarise(
+    mode             = first(mode),
+    model_name       = first(model_name),
+    codec            = first(codec),
+    tier             = first(tier),
+    resolution       = first(resolution),
+    fps_target       = first(fps_target),
+    avg_detections   = mean(detection_count, na.rm = TRUE),
+    total_latency_ms = mean(total_latency_us, na.rm = TRUE) / 1000,
+    rsu_overhead_ms  = mean(rsu_overhead_us, na.rm = TRUE) / 1000,
+    inference_ms     = mean(inference_time_us, na.rm = TRUE) / 1000,
+    network_ms  = if (all(is.na(network_latency_us))) NA_real_ else mean(network_latency_us, na.rm = TRUE) / 1000,
+    queue_ms    = if (all(is.na(zp_queueing_us))) NA_real_ else mean(zp_queueing_us, na.rm = TRUE) / 1000,
+    latency_p95_ms = quantile(total_latency_us, 0.95, na.rm = TRUE) / 1000,
+    frames_received = n(),
+    expected_frames = as.numeric(as.character(first(fps_target))) * 60,
+    drop_rate_pct   = pmax(0, 1 - (frames_received / expected_frames)) * 100,
+    avg_frame_kb    = mean(frame_size_bytes, na.rm = TRUE) / 1024,
+    .groups = "drop"
+  )
+
+```
+
+```{=typst}
+#pagebreak()
+```
+# Model Comparison (Primary Analysis)
+
+**Goal**: Determine which YOLO model variant offers the best latency performance.
+
+```{r model-subset}
+model_comparison <- device_perf %>%
+  filter(codec == "JpgLossy", tier == "T1")
+
+```
+
+## Latency by Model and Mode
+
+```{r model-latency-plot, fig.width=13, fig.height=7}
+ggplot(model_comparison, aes(x = model_name, y = total_latency_ms, fill = mode)) +
+  geom_boxplot(alpha = 0.8, outlier.size = 0.8) +
+  facet_grid(resolution ~ fps_target, labeller = labeller(fps_target = ~ paste0(.x, " FPS"))) +
+  scale_fill_manual(values = mode_colors) +
+  labs(
+    title = "End-to-End Latency: Model × Mode × Resolution",
+    subtitle = "Fixed: JPEG codec, T1 quality | Lower is better",
+    x = "Model",
+    y = "Latency (ms)",
+    fill = "Processing Mode"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Model Performance Summary
+
+```{r benefit-heatmap, fig.width=12, fig.height=8}
+
+heatmap_data <- model_comparison %>%
+  group_by(model_name, fps_target, mode) %>%
+  summarise(mean_lat = mean(total_latency_ms, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = mode, values_from = mean_lat) %>%
+  mutate(
+    benefit_ms = Local - Offload,
+    label_text = paste0(round(benefit_ms, 0), " ms")
+  )
+
+ggplot(heatmap_data, aes(x = fps_target, y = model_name, fill = benefit_ms)) +
+  geom_tile(color = "white", lwd = 0.5) +
+  
+  geom_text(aes(label = label_text), color = "black", size = 5, fontface = "bold") +
+  scale_fill_gradient2(
+    low = "#e74c3c", 
+    mid = "white",
+    high = "#2ecc71",
+    midpoint = 0,
+    name = "Offload Advantage (ms)"
+  ) +
+  labs(
+    title = "Decision Matrix: When Should We Offload?",
+    subtitle = "Green = Offload is faster | Red = Local is faster | Values show latency reduction in ms",
+    x = "Target FPS",
+    y = "Model Variant"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(face = "bold", size = 16),
+    legend.position = "right",
+    axis.text = element_text(size = 12, color = "black")
+  )
+
+```
+
+## Offload Benefit by Model
+
+```{r offload-benefit, fig.width=10, fig.height=5}
+offload_benefit <- model_comparison %>%
+  group_by(model_name, resolution, fps_target, mode) %>%
+  summarise(mean_latency = mean(total_latency_ms, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = mode, values_from = mean_latency) %>%
+  mutate(benefit_ms = Local - Offload)
+
+ggplot(offload_benefit, aes(x = fps_target, y = benefit_ms, fill = model_name)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", linewidth = 0.8) +
+  facet_wrap(~resolution) +
+  scale_fill_manual(values = model_colors) +
+  labs(
+    title = "Offload Latency Benefit by Configuration",
+    subtitle = "Positive = Offload faster than Local | Red line = break-even",
+    x = "Target FPS", y = "Latency Reduction (ms)", fill = "Model"
+  )
+
+```
+
+The data reveals a universal performance advantage for offloading. Since even the lightest models (yolov5n) show positive gains above the zero-line threshold, we can infer that the local device's computational limitations are the primary bottleneck, rendering offloading the superior approach in all tested scenarios.
+
+```{=typst}
+#pagebreak()
+```
+# Resolution Impact
+
+**Goal**: Quantify the latency reduction from downscaling input frames.
+
+## Resolution Trade-off: Latency vs. Detection Count
+
+**Goal**: Determine if higher resolutions yield enough additional detections to justify the latency cost.
+
+```{r resolution-detection-tradeoff, fig.width=12, fig.height=5}
+res_det_data <- device_perf %>%
+  filter(codec == "JpgLossy", tier == "T1", mode == "Offload")
+
+p1 <- ggplot(res_det_data, aes(x = resolution, y = avg_detections, fill = resolution)) +
+  geom_boxplot(alpha = 0.7, show.legend = FALSE) +
+  scale_fill_brewer(palette = "Blues") +
+  labs(
+    title = "Detection Sensitivity",
+    subtitle = "Average objects detected per frame",
+    x = "Resolution", 
+    y = "Avg Detections"
+  )
+
+p2 <- ggplot(res_det_data, aes(x = avg_detections, y = total_latency_ms, color = resolution)) +
+  geom_point(alpha = 0.6, size = 2) +
+  stat_ellipse(level = 0.9, linetype = "dashed", size = 0.5) +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    title = "Efficiency Frontier",
+    subtitle = "Is the latency cost (Y) justified by more detections (X)?",
+    x = "Avg Detections", 
+    y = "Total Latency (ms)"
+  )
+
+library(patchwork)
+p1 + p2
+
+save_figure(p2, "efficiency_frontier")
+
+```
+
+These charts analyze the trade-off between detection accuracy and system performance, showing that achieving higher average detection counts results in a disproportionate increase in total latency. The "Efficiency Frontier" demonstrates that while increasing resolution from Letterbox to FHD slightly improves detection sensitivity, it incurs a latency penalty that may not be justified by the marginal gain in objects detected.
+
+# Codec and Compression Analysis
+
+**Goal**: Determine if compression overhead is worth the bandwidth savings.
+
+```{r codec-subset}
+codec_comparison <- device_perf %>%
+  filter(model_name == "yolov5n", resolution == "Letterbox")
+
+```
+
+## Codec Comparison
+
+```{r codec-plot, fig.width=13, fig.height=6}
+codec_filtered <- codec_comparison %>%
+  filter(tier %in% c("T1", "T3"))
+
+ggplot(codec_filtered, aes(x = codec, y = total_latency_ms, fill = mode)) +
+  geom_boxplot(alpha = 0.8, outlier.size = 0.8) +
+  facet_grid(tier ~ fps_target, labeller = labeller(fps_target = ~ paste0(.x, " FPS"))) +
+  scale_fill_manual(values = mode_colors) +
+  labs(
+    title = "Codec Impact on Latency",
+    subtitle = "T1 = low quality/small size | T3 = high quality/large size",
+    x = "Codec",
+    y = "Latency (ms)",
+    fill = "Mode"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The Above Figure illustrates a catastrophic failure mode when using high-quality lossless PNGs. The excessive bandwidth requirements at higher frame rates (5+ FPS) saturate the network and the queue, causing latency to spike over 60 seconds due to transmission queuing.
+
+> Note: every Frame that takes longer than 60 Seconds is considered dropped even when we have a entry for it!
+
+# Latency Decomposition (Offload Mode)
+
+**Goal**: Understand where time is spent in the offload pipeline.
+
+```{r latency-decomposition}
+offload_only <- device_perf %>%
+  filter(mode == "Offload", codec == "JpgLossy", tier == "T1") %>%
+  select(model_name, resolution, fps_target, rsu_overhead_ms, network_ms, queue_ms, inference_ms) %>%
+  pivot_longer(
+    cols = c(rsu_overhead_ms, network_ms, queue_ms, inference_ms),
+    names_to = "component",
+    values_to = "time_ms"
+  ) %>%
+  mutate(
+    component = factor(component, 
+      levels = c("inference_ms", "queue_ms", "network_ms", "rsu_overhead_ms"),
+      labels = c("Inference", "Queue Wait", "Network", "RSU Overhead"))
+  )
+
+offload_only_single <- device_perf_single %>%
+  filter(mode == "Offload", codec == "JpgLossy", tier == "T1") %>%
+  select(model_name, resolution, fps_target, rsu_overhead_ms, network_ms, queue_ms, inference_ms) %>%
+  pivot_longer(
+    cols = c(rsu_overhead_ms, network_ms, queue_ms, inference_ms),
+    names_to = "component",
+    values_to = "time_ms"
+  ) %>%
+  mutate(
+    component = factor(component, 
+      levels = c("inference_ms", "queue_ms", "network_ms", "rsu_overhead_ms"),
+      labels = c("Inference", "Queue Wait", "Network", "RSU Overhead"))
+  )
+
+
+```
+
+## Latency Budget Breakdown
+
+```{r latency-stacked, fig.width=13, fig.height=6}
+latency_budget <- offload_only %>%
+  group_by(model_name, resolution, fps_target, component) %>%
+  summarise(mean_time = mean(time_ms, na.rm = TRUE), .groups = "drop")
+
+lbb_offload_full <- ggplot(latency_budget, aes(x = fps_target, y = mean_time, fill = component)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_grid(resolution ~ model_name) +
+  scale_fill_manual(values = c(
+    "Inference" = "#27ae60",
+    "Queue Wait" = "#e74c3c", 
+    "Network" = "#f39c12",
+    "RSU Overhead" = "#3498db"
+  )) +
+  labs(
+    title = "Latency Budget Decomposition (Offload Mode, 1:k with k = 3)",
+    subtitle = "Green = useful compute | Red = congestion | Orange = network | Blue = capture/encode",
+    x = "Target FPS",
+    y = "Time (ms)",
+    fill = "Component"
+  )
+
+lbb_offload_letterbox_only3k <- latency_budget %>%
+  filter(resolution == "Letterbox") %>%
+  ggplot(aes(x = fps_target, y = mean_time, fill = component)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_grid(~ model_name) + # Simplified faceting since resolution is constant
+  scale_fill_manual(values = c(
+    "Inference" = "#27ae60",
+    "Queue Wait" = "#e74c3c", 
+    "Network" = "#f39c12",
+    "RSU Overhead" = "#3498db"
+  )) +
+  labs(
+    title = "Latency Budget Decomposition (Offload Mode, 1:k with k = 3)",
+    subtitle = "Green = useful compute | Red = congestion | Orange = network | Blue = capture/encode",
+    x = "Target FPS",
+    y = "Time (ms)",
+    fill = "Component"
+  )
+
+latency_budget_single <- offload_only_single %>%
+  group_by(model_name, resolution, fps_target, component) %>%
+  summarise(mean_time = mean(time_ms, na.rm = TRUE), .groups = "drop")
+
+lbb_offload_letterbox_only1k <- ggplot(latency_budget_single, aes(x = fps_target, y = mean_time, fill = component)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_grid(resolution ~ model_name) +
+  scale_fill_manual(values = c(
+    "Inference" = "#27ae60",
+    "Queue Wait" = "#e74c3c", 
+    "Network" = "#f39c12",
+    "RSU Overhead" = "#3498db"
+  )) +
+  labs(
+    title = "Latency Budget Decomposition (Offload Mode, 1:k with k = 1) ",
+    subtitle = "Green = useful compute | Red = congestion | Orange = network | Blue = capture/encode",
+    x = "Target FPS",
+    y = "Time (ms)",
+    fill = "Component"
+  )
+
+save_figure(lbb_offload_full, "lbb_offload_full", width = 25, height = 15)
+save_figure(lbb_offload_letterbox_only3k, "lbb_offload_letterbox_only3k", width = 25, height = 10)
+save_figure(lbb_offload_letterbox_only1k, "lbb_offload_letterbox_only1k", width = 25, height = 10)
+
+```
+
+At low frame rates (1 FPS), network transmission (Orange) and inference (Green) constitute a significant portion of the total latency budget. However, as the load increases to 15 FPS, the Queue Wait time (Red) grows exponentially, effectively **masking** the network latency.
+
+While the physical network transmission time remains relatively constant (approx. 5-10ms), it becomes statistically negligible compared to the queue delays, which can exceed 500ms. This confirms that **optimization efforts should focus entirely on the scheduler and inference engine**, as network bandwidth is not the bottleneck in this architecture.
+
+```{=typst}
+#pagebreak()
+```
+# Statistical Validation
+
+## Regression: Factors Affecting Latency
+
+```{r regression-latency}
+# Full model on clean subset
+regression_data <- device_perf %>%
+  filter(codec == "JpgLossy", tier == "T1") %>%
+  mutate(fps_numeric = as.numeric(as.character(fps_target)))
+
+latency_model <- lm(total_latency_ms ~ model_name * mode + resolution + fps_numeric + source_device,
+                    data = regression_data)
+
+cat("=== Latency Regression Model ===\n\n")
+print(summary(latency_model))
+
+```
+
+The regression model explains over 95% of the variance in latency (R2=0.95), identifying Model Complexity as the single largest driver of latency (adding \~3277ms for yolov5m). It mathematically confirms that Offloading significantly reduces latency, with the benefit scaling up massively for larger models (indicated by the strong negative interaction terms).
+
+## ANOVA: Factor Importance
+
+```{r anova}
+cat("\n=== ANOVA: Factor Significance ===\n\n")
+print(anova(latency_model))
+
+```
+
+The ANOVA table confirms that Model Name, Mode, and their Interaction are the dominant factors controlling system performance (p\<2e−16), far outweighing other variables. Notably, Resolution is shown to be statistically insignificant (p=0.23), proving that in this specific setup, the computational depth of the neural network matters far more than the pixel count of the input image.
+
+## Effect Sizes
+
+```{r effect-sizes}
+effects <- broom::tidy(latency_model) %>%
+  filter(p.value < 0.05) %>%
+  arrange(desc(abs(estimate))) %>%
+  mutate(
+    estimate = round(estimate, 2),
+    std.error = round(std.error, 2),
+    p.value = format(p.value, scientific = TRUE, digits = 2)
+  )
+
+kable(effects, caption = "Significant Predictors of Latency (p < 0.05)")
+
+```
+
+This table ranks the "real-world" impact of each significant factor, showing that the decision to use the Medium Model (yolov5m) increases latency by over 3 seconds, whereas Offloading that specific model recovers nearly 2 seconds of that time. It puts the other factors into perspective, revealing that while differences between RSU devices are statistically real (\~300ms), they are minor compared to the massive impact of model selection and offloading strategy.
+
+```{=typst}
+#pagebreak()
+```
+# Multi-RSU Contention Analysis
+
+**Critical Context**: The system runs **3 RSUs feeding 1 Zone Processor**. This means the ZP must handle 3× the frame rate of any individual RSU.
+
+```{r contention-data-prep}
+run_level_perf <- device_perf %>%
+  filter(mode == "Offload", codec == "JpgLossy", tier == "T1") %>%
+  group_by(run_id, model_name, resolution, fps_target) %>%
+  summarise(
+    n_rsus = n_distinct(source_device),
+    aggregate_fps = as.numeric(as.character(first(fps_target))) * n_rsus,
+    
+    mean_queue_ms = mean(queue_ms, na.rm = TRUE),
+    max_queue_ms = max(queue_ms, na.rm = TRUE),
+    queue_spread_ms = max(queue_ms, na.rm = TRUE) - min(queue_ms, na.rm = TRUE),
+    
+    # Latency fairness: do all RSUs get similar performance?
+    latency_cv = sd(total_latency_ms, na.rm = TRUE) / mean(total_latency_ms, na.rm = TRUE) * 100,
+    
+    mean_latency_ms = mean(total_latency_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+## ZP Saturation Point
+
+```{r zp-saturation, fig.width=10, fig.height=5}
+# Summarize data to show the trend line
+zp_trend <- run_level_perf %>%
+  group_by(resolution, model_name, aggregate_fps) %>%
+  summarise(mean_queue_ms = mean(mean_queue_ms, na.rm = TRUE), .groups = "drop")
+
+ggplot(zp_trend, aes(x = aggregate_fps, y = mean_queue_ms, color = model_name, group = model_name)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  facet_wrap(~resolution) +
+  scale_color_manual(values = model_colors) +
+  scale_x_continuous(breaks = c(3, 15, 30, 45)) +
+  labs(
+    title = "Zone Processor Saturation Levels",
+    subtitle = "Flat lines indicate the buffer is full (Maximum Capacity reached)",
+    x = "Aggregate FPS (3 RSUs combined)",
+    y = "Mean Queue Wait (ms)",
+    color = "Model"
+  ) +
+  theme(panel.grid.minor = element_blank())
+
+```
+
+This graph illustrates that the Zone Processor rapidly reaches a saturation point, indicated by the flattening of queue wait times (plateau) as the aggregate frame rate increases and the internal buffer hits maximum capacity. The significantly higher delays for the Medium model (red line) confirm that computational complexity is the primary driver of this bottleneck, regardless of the input resolution.
+
+## RSU Fairness Analysis
+
+When multiple RSUs share a ZP, do they all receive equal service, or do some RSUs consistently wait longer?
+
+```{r fairness-analysis, fig.width=10, fig.height=5}
+# Compare latency across RSUs within the same run
+rsu_comparison <- device_perf %>%
+  filter(mode == "Offload", codec == "JpgLossy", tier == "T1") %>%
+  group_by(model_name, fps_target, source_device) %>%
+  summarise(
+    mean_latency = mean(total_latency_ms, na.rm = TRUE),
+    mean_queue = mean(queue_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(rsu_comparison, aes(x = fps_target, y = mean_queue, fill = source_device)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  facet_wrap(~model_name) +
+  labs(
+    title = "Queue Time by RSU: Is Service Fair?",
+    subtitle = "Unequal bars indicate some RSUs wait longer than others",
+    x = "Target FPS",
+    y = "Mean Queue Wait (ms)",
+    fill = "RSU Device"
+  ) +
+  theme(legend.position = "right")
+
+```
+
+The graph reveals a clear "pecking order." RSU-0000 consistently gets served first, while RSU-0002 is always stuck waiting the longest. This happens because the Zone Processor checks connections in a fixed list (First #0, then #1, then #2) using Round Robin but still seems to favor one over the other.
+
+When the system is overloaded, RSU-0002 gets stuck at the back of the line every single time. It effectively has to wait for the first two units to finish before it even gets a turn, which explains why it waits nearly twice as long as RSU-0000.
+
+## Effective Throughput per RSU
+
+```{r throughput-analysis, fig.width=10, fig.height=5}
+# Calculate Achieved FPS
+throughput_data <- device_perf %>%
+  filter(mode == "Offload", codec == "JpgLossy", tier == "T1") %>%
+  mutate(
+    target_fps_num = as.numeric(as.character(fps_target)),
+    achieved_fps = frames_received / 30  # Assumes 30s duration
+  ) %>%
+  # Aggregate to get one clean point per configuration
+  group_by(resolution, model_name, target_fps_num) %>%
+  summarise(mean_achieved = mean(achieved_fps), .groups = "drop")
+
+ggplot(throughput_data, aes(x = target_fps_num, y = mean_achieved, color = model_name, group = model_name)) +
+  # The "Ideal" Line (x = y)
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  annotate("text", x = 12, y = 13, label = "Ideal (No Drops)", color = "gray50", angle = 35) +
+  
+  # The Actual Data
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  
+  facet_wrap(~resolution) +
+  scale_color_manual(values = model_colors) +
+  scale_x_continuous(breaks = c(1, 5, 10, 15)) +
+  scale_y_continuous(breaks = c(1, 5, 10, 15), limits = c(0, 16)) +
+  labs(
+    title = "System Throughput: Target vs. Realized FPS",
+    subtitle = "Points below the diagonal dashed line indicate dropped frames (saturation)",
+    x = "Target FPS (Input)",
+    y = "Achieved FPS (Output)",
+    color = "Model"
+  ) +
+  theme(panel.grid.minor = element_blank())
+
+```
+
+The Graph reveals the computational ceiling of the Zone Processor. For the `yolov5n` model, the saturation point is approximately 6 FPS per RSU (18 FPS aggregate). The flatlining proves the system is compute-bound.
+
+```{=typst}
+#pagebreak()
+```
+# Executive Summary
+
+```{r compute-summary-stats}
+# Compute key metrics for summary
+overall_best <- device_perf %>%
+  filter(codec == "JpgLossy", tier == "T1") %>%
+  group_by(model_name, mode) %>%
+  summarise(mean_lat = mean(total_latency_ms, na.rm = TRUE), .groups = "drop") %>%
+  ungroup() %>%
+  slice_min(mean_lat, n = 1, with_ties = FALSE)
+
+fps_viability <- device_perf %>%
+  filter(codec == "JpgLossy", tier == "T1", mode == "Offload") %>%
+  group_by(fps_target) %>%
+  summarise(
+    min_latency = min(total_latency_ms, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    max_throughput_viable = min_latency < (1000 / as.numeric(as.character(fps_target)))
+  )
+```
+
+## Key Findings
+
+### The Efficiency Frontier (Resolution vs. Detection)
+
+**Critical Insight:** Higher resolutions act as a "latency tax" without providing additional value.
+
+- **Zero Accuracy Gain:** Analysis of the efficiency frontier reveals that `Letterbox` (640×640), `HD`, and `FHD` detected the **exact same number of vehicles** per frame on average.
+- **Latency Penalty:** Increasing resolution to FHD increases transmission and queueing time significantly but yields **0% increase in detection sensitivity**.
+- **Conclusion:** `Letterbox` is the optimal operating point for this traffic scenario.
+
+### Statistical Drivers of Latency
+
+Regression analysis ($R^2 = 0.95$) confirms the hierarchy of performance factors:
+
+1.  **Model Complexity (Dominant):** The choice of YOLO model is the single largest predictor of performance ($p < 2e^{-16}$). Switching from `YOLOv5n` to `YOLOv5m` adds over **3,277 ms** of latency.
+2.  **Processing Mode:** Offloading is statistically significant ($p < 2e^{-16}$), but its benefit scales non-linearly with model complexity.
+3.  **Resolution (Insignificant):** In terms of pure computational latency, resolution is statistically insignificant ($p = 0.23$) compared to the massive cost of inference, though it contributes to queue congestion.
+
+### The "Offload Scaling" Effect
+
+Offloading is not a flat bonus; it is a multiplier for complex tasks.
+
+- **YOLOv5n:** Offloading saves \~300ms (marginal benefit vs network cost).
+- **YOLOv5m:** Offloading saves **\>2,000ms**.
+- **Guideline:** The heavier the model, the more critical the Zone Processor becomes.
+
+### System Capacity & Multi-RSU Bottlenecks
+
+The system is bottlenecked by the **Zone Processor's Inference Speed**, causing the Input Queue to overflow.
+
+- **Safe Zone:** **≤ 15 FPS Aggregate** (e.g., 3 RSUs running at 5 FPS each). The inference engine can keep up with the incoming frame rate.
+- **Saturation Zone:** At 30 FPS Aggregate (10 FPS/RSU), the arrival rate exceeds the inference rate. The queue begins to fill, causing latency to spike exponentially.
+- **Failure Zone:** At 45 FPS Aggregate (15 FPS/RSU), the system enters a "Congestion Collapse." The inference engine is overwhelmed, and frames sit in the queue for seconds, resulting in massive data staleness.
+
+## Recommended Configuration
+
+Based on the Efficiency Frontier and Saturation analysis, the table below outlines the optimal system settings for different scenarios.
+
+```{r config-table}
+#| echo: false
+
+library(tibble)
+library(knitr)
+
+config_data <- tribble(
+  ~"Use Case",        ~Model,    ~Mode,     ~Resolution, ~Codec, ~"Max FPS", ~Notes,
+  "**Optimal**",      "YOLOv5n", "Offload", "Letterbox", "JPEG", "5",        "Best balance of speed & throughput.",
+  "High Load",        "YOLOv5n", "Local",   "Letterbox", "JPEG", "1",        "Use when Network/ZP is congested.",
+  "High Precision*",  "YOLOv5s", "Offload", "Letterbox", "JPEG", "1-5",      "If v5n accuracy is insufficient.",
+  "**Avoid**",        "Any",     "Any",     "FHD",       "PNG",  ">5",       "High latency tax (wasted resources)."
+)
+
+kable(config_data, caption = "Recommended System Configuration Matrix")
+
+```
+
+*\> **Note:** "High Precision" recommends Letterbox because our data showed FHD provided no additional detections. If small-object detection is strictly required in future scenarios, HD may be reconsidered, but strictly for low FPS.*

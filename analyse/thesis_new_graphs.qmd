@@ -1,0 +1,563 @@
+---
+title: "Thesis Figures"
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(tidyverse)
+library(ggplot2)
+library(gt)
+library(patchwork)
+library(scales)
+library(Cairo)
+
+df <- load_new_logs_multi("phase2_logs/multi/")
+df_single <- load_new_logs_single("phase2_logs/single/")
+old_df <- load_old_logs("phase1_logs/")
+
+old_df <- old_df %>%
+  mutate(
+    total_latency_ms = total_latency_us / 1000,
+    inference_ms     = inference_us / 1000,
+    network_ms       = network_latency_us / 1000,
+    fps_numeric      = as.integer(str_extract(filename, "\\d+(?=fps)")),
+    model_label = recode(model_name,
+      yolov5n = "YOLOv5n",
+      yolov5s = "YOLOv5s",
+      yolov5m = "YOLOv5m"
+    ),
+    mode = case_when(
+      str_detect(filename, "LocalOnly") ~ "Local",
+      str_detect(filename, "Offload")   ~ "Offload",
+      TRUE ~ experiment_mode
+    ),
+    model_label = factor(model_label, levels = c("YOLOv5n", "YOLOv5s", "YOLOv5m")),
+    fps_numeric = factor(fps_numeric, levels = c(1, 5, 10, 15))
+  )
+
+df <- df %>%
+  mutate(
+    total_latency_ms = total_latency_us / 1000,
+    queue_wait_ms    = zp_queueing_us / 1000,
+    inference_ms     = inference_time_us / 1000,
+    network_ms       = network_latency_us / 1000,
+    rsu_overhead_ms  = rsu_overhead_us / 1000,
+    zp_processing_ms = zp_processing_us / 1000,
+    fps_numeric = as.integer(str_extract(filename, "\\d+(?=fps)")),
+    model_label = recode(model_name,
+      yolov5n = "YOLOv5n",
+      yolov5s = "YOLOv5s",
+      yolov5m = "YOLOv5m"
+    ),
+    codec_label = recode(codec,
+      JpgLossy    = "JPEG",
+      WebpLossy   = "WebP",
+      PngLossless = "PNG"
+    ),
+    tier_label = recode(tier,
+      T1 = "Best",
+      T2 = "Default",
+      T3 = "Fast"
+    ),
+    resolution = factor(resolution, levels = c("Letterbox", "HD", "FHD")),
+    model_label = factor(model_label, levels = c("YOLOv5n", "YOLOv5s", "YOLOv5m")),
+    fps_numeric = factor(fps_numeric, levels = c(1, 5, 10, 15))
+  )
+
+df_single <- df_single %>%
+  mutate(
+    total_latency_ms = total_latency_us / 1000,
+    queue_wait_ms    = zp_queueing_us / 1000,
+    inference_ms     = inference_time_us / 1000,
+    network_ms       = network_latency_us / 1000,
+    rsu_overhead_ms  = rsu_overhead_us / 1000,
+    zp_processing_ms = zp_processing_us / 1000,
+    fps_numeric = as.integer(str_extract(filename, "\\d+(?=fps)")),
+    model_label = recode(model_name,
+      yolov5n = "YOLOv5n",
+      yolov5s = "YOLOv5s",
+      yolov5m = "YOLOv5m"
+    ),
+    codec_label = recode(codec,
+      JpgLossy    = "JPEG",
+      WebpLossy   = "WebP",
+      PngLossless = "PNG"
+    ),
+    tier_label = recode(tier,
+      T1 = "Best",
+      T2 = "Default",
+      T3 = "Fast"
+    ),
+    resolution = factor(resolution, levels = c("Letterbox", "HD", "FHD")),
+    model_label = factor(model_label, levels = c("YOLOv5n", "YOLOv5s", "YOLOv5m")),
+    fps_numeric = factor(fps_numeric, levels = c(1, 5, 10, 15))
+  )
+
+base_theme <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 16),
+    plot.subtitle    = element_text(size = 12, color = "gray40"),
+    strip.text       = element_text(face = "bold", size = 12),
+    legend.position  = "bottom",
+    axis.title       = element_text(size = 12),
+    panel.grid.minor = element_blank() 
+  )
+
+model_colors <- c(
+  "YOLOv5n" = "#3498db", 
+  "YOLOv5s" = "#f39c12",
+  "YOLOv5m" = "#e74c3c"
+)
+
+mode_colors <- c(
+  "Local"   = "#2c3e50",
+  "Offload" = "#27ae60" 
+)
+
+component_colors <- c(
+  "Inference"     = "#27ae60",
+  "Queue Wait"    = "#e74c3c",
+  "Network"       = "#f39c12",
+  "RSU Overhead"  = "#3498db"
+)
+
+rsu_colors <- c(
+  "RSU-0000" = "#3498db",
+  "RSU-0001" = "#f39c12",
+  "RSU-0002" = "#e74c3c"
+)
+
+if (!dir.exists("figures")) dir.create("figures")
+
+save_figure <- function(plot, name, width = 16, height = 10) {
+  ggsave(file.path("figures", paste0(name, ".pdf")), plot,
+    width = width, height = height, units = "cm", device = cairo_pdf)
+  ggsave(file.path("figures", paste0(name, ".png")), plot,
+    width = width, height = height, units = "cm", dpi = 300)
+}
+
+df %>%
+  group_by(mode) %>%
+  summarise(
+    na_controller = sum(is.na(controller_received)),
+    latency_exceeded = mean(total_latency_us > (1000000 / as.integer(str_extract(filename, "\\d+(?=fps)"))), na.rm = TRUE)
+  )
+
+```
+
+```{r figA-dfr-phase1}
+# Figure A — Phase 1 DFR Local + Offload (Section 6.1)
+# Replaces Figures 5 & 6 from the prior publication.
+# Hardware: Raspberry Pi RSU, NVIDIA Jetson Nano ZP (GPU), 1:1 architecture.
+
+dfr_phase1 <- old_df %>%
+  group_by(mode, model_label, fps_numeric) %>%
+  summarise(
+    received_frames = n(),
+    expected_frames = 600 * as.integer(as.character(first(fps_numeric))),
+    dfr = (1 - received_frames / expected_frames) * 100,
+    .groups = "drop"
+  )
+
+dfr_local <- dfr_phase1 %>% filter(mode == "Local")
+
+figA_local <- ggplot(dfr_local,
+    aes(x = fps_numeric, y = dfr, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = sprintf("%.0f%%", dfr)),
+    position = position_dodge(width = 0.8),
+    vjust = -0.4, size = 2.5
+  ) +
+  scale_fill_manual(values = model_colors, name = "Model") +
+  scale_y_continuous(
+    limits = c(0, 105),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    title   = "Phase 1: Local Inference (RSU)",
+    subtitle = "JPEG, FHD",
+    x       = "Target Frame Rate (FPS)",
+    y       = "Dropped Frame Rate (%)",
+  ) +
+  base_theme
+
+save_figure(figA_local, "phase1_dfr_local") 
+
+dfr_offload <- dfr_phase1 %>% filter(mode == "Offload")
+
+figA_offload <- ggplot(dfr_offload,
+    aes(x = fps_numeric, y = dfr, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = sprintf("%.0f%%", dfr)),
+    position = position_dodge(width = 0.8),
+    vjust = -0.4, size = 2.5
+  ) +
+  scale_fill_manual(values = model_colors, name = "Model") +
+  scale_y_continuous(
+    limits = c(0, 105),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    title   = "Phase 1: Offloaded Inference (ZP)",
+    subtitle = "JPEG, FHD",
+    x       = "Target Frame Rate (FPS)",
+    y       = "Dropped Frame Rate (%)",
+  ) +
+  base_theme
+
+save_figure(figA_offload, "phase1_dfr_offload")
+
+# To display them in your notebook/document sequentially:
+figA_local
+figA_offload
+```
+
+```{r fig1-dfr}
+
+dfr_data <- df %>%
+  filter(codec == "JpgLossy", resolution == "Letterbox", tier == "T1") %>%
+  group_by(mode, model_label, fps_numeric) %>%
+  summarise(
+    received_frames = n(),
+    expected_frames = 60 * as.integer(as.character(first(fps_numeric))) * 3,
+    dfr = pmax(0, (1 - received_frames / expected_frames) * 100),
+    .groups = "drop"
+  )
+dfr_data_single <- df_single %>%
+  group_by(mode, model_label, fps_numeric) %>%
+  summarise(
+    received_frames = n(),
+    expected_frames = 60 * as.integer(as.character(first(fps_numeric))),
+    dfr = pmax(0, (1 - received_frames / expected_frames) * 100),
+    .groups = "drop"
+  )
+dfr_local_phase2 <- dfr_data %>% filter(mode == "Local")
+fig1_local <- ggplot(dfr_local_phase2,
+    aes(x = fps_numeric, y = dfr, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = sprintf("%.0f%%", dfr)),
+    position = position_dodge(width = 0.8),
+    vjust = -0.4, size = 2.5
+  ) +
+  scale_fill_manual(values = model_colors, name = "Model") +
+  scale_y_continuous(
+    limits = c(0, 105),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    title    = "Phase 2: Local Inference (RSU)",
+    subtitle = "JPEG, Letterbox, Best quality (T1)",
+    x        = "Target Frame Rate (FPS)",
+    y        = "Dropped Frame Rate (%)"
+  ) +
+  base_theme
+save_figure(fig1_local, "phase2_dfr_local")
+
+dfr_offload_phase2_multi <- dfr_data %>% filter(mode == "Offload")
+fig1_offload_multi <- ggplot(dfr_offload_phase2_multi,
+    aes(x = fps_numeric, y = dfr, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = sprintf("%.0f%%", dfr)),
+    position = position_dodge(width = 0.8),
+    vjust = -0.4, size = 2.5
+  ) +
+  scale_fill_manual(values = model_colors, name = "Model") +
+  scale_y_continuous(
+    limits = c(0, 105),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    title    = "Phase 2: Offloaded Inference (1:k with k=3)",
+    subtitle = "JPEG, Letterbox, Best quality (T1)",
+    x        = "Target Frame Rate (FPS)",
+    y        = "Dropped Frame Rate (%)"
+  ) +
+  base_theme
+save_figure(fig1_offload_multi, "phase2_dfr_offload_multi")
+
+dfr_offload_phase2_single <- dfr_data_single
+fig1_offload_single <- ggplot(dfr_offload_phase2_single,
+    aes(x = fps_numeric, y = dfr, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = sprintf("%.0f%%", dfr)),
+    position = position_dodge(width = 0.8),
+    vjust = -0.4, size = 2.5
+  ) +
+  scale_fill_manual(values = model_colors, name = "Model") +
+  scale_y_continuous(
+    limits = c(0, 105),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    title    = "Phase 2: Offloaded Inference (1:k with k=1)",
+    subtitle = "JPEG, Letterbox, Best quality (T1)",
+    x        = "Target Frame Rate (FPS)",
+    y        = "Dropped Frame Rate (%)"
+  ) +
+  base_theme
+save_figure(fig1_offload_single, "phase2_dfr_offload_single")
+
+dfr_offload_combined <- bind_rows(
+  dfr_offload_phase2_multi  %>% mutate(ratio = "k = 3"),
+  dfr_offload_phase2_single %>% mutate(ratio = "k = 1")
+) %>%
+  mutate(ratio = factor(ratio, levels = c("k = 1", "k = 3")))
+fig1_offload_combined <- ggplot(dfr_offload_combined,
+    aes(x = fps_numeric, y = dfr, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_text(
+    aes(label = sprintf("%.0f%%", dfr)),
+    position = position_dodge(width = 0.8),
+    vjust = -0.4, size = 2.5
+  ) +
+  facet_wrap(~ ratio, ncol = 2) +
+  scale_fill_manual(values = model_colors, name = "Model") +
+  scale_y_continuous(
+    limits = c(0, 105),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    title    = "Phase 2: Offloaded Inference",
+    subtitle = "1:k with k=1 vs k=3 | JPEG, Letterbox, Best quality (T1)",
+    x        = "Target Frame Rate (FPS)",
+    y        = "Dropped Frame Rate (%)"
+  ) +
+  base_theme
+save_figure(fig1_offload_combined, "phase2_dfr_offload_combined")
+
+fig1_local
+fig1_offload_multi
+fig1_offload_single
+fig1_offload_combined
+
+```
+
+```{r fig2-codec-table}
+# Figure 2 — Codec Median Latency Table (Section 6.3)
+
+codec_data <- df %>%
+  filter(
+    mode       == "Offload",
+    model_name == "yolov5n",
+    fps_numeric == 5,
+    resolution == "Letterbox"
+  ) %>%
+  group_by(codec_label) %>%
+  summarise(
+    median_latency_ms   = median(total_latency_ms),
+    iqr_ms              = IQR(total_latency_ms),
+    median_network_ms   = median(network_ms, na.rm = TRUE),
+    median_inference_ms = median(inference_ms),
+    .groups = "drop"
+  ) %>%
+  arrange(median_latency_ms)
+
+fig2_table <- codec_data %>%
+  gt() %>%
+  cols_label(
+    codec_label         = "Codec",
+    median_latency_ms   = "Median E2E Latency (ms)",
+    iqr_ms              = "IQR (ms)",
+    median_network_ms   = "Median Network (ms)",
+    median_inference_ms = "Median Inference (ms)"
+  ) %>%
+  fmt_number(
+    columns  = where(is.numeric),
+    decimals = 1
+  ) %>%
+  tab_source_note(
+    "Filtered to: Offload mode, YOLOv5n, 5 FPS, Letterbox resolution"
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#FFEBEE"),
+    locations = cells_body(rows = codec_label == "PNG")
+  )
+
+gtsave(fig2_table, file.path("figures", "phase2_codec_table.png"))
+fig2_table
+```
+
+```{r fig3-frontier}
+# Figure 3 — Efficiency Frontier (Section 6.3)
+
+frontier_data <- df %>%
+  filter(mode == "Offload") %>%
+  group_by(model_label, resolution) %>%
+  summarise(
+    avg_detections    = mean(detection_count),
+    median_latency_ms = median(total_latency_ms),
+    .groups = "drop"
+  )
+
+p_left <- ggplot(frontier_data,
+    aes(x = resolution, y = avg_detections, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_fill_manual(values = model_colors, name = "Model") +
+  labs(
+    title    = "Detection Sensitivity",
+    subtitle = "Average objects detected per frame",
+    x = "Resolution",
+    y = "Avg Detections"
+  ) +
+  base_theme
+
+p_right <- ggplot(frontier_data,
+    aes(x = avg_detections, y = median_latency_ms,
+        color = model_label, shape = resolution)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = model_colors, name = "Model") +
+  scale_shape_manual(
+    values = c(Letterbox = 16, HD = 17, FHD = 15),
+    name   = "Resolution"
+  ) +
+  labs(
+    title    = "Efficiency Frontier",
+    subtitle = "Is the latency cost (Y) justified by more detections (X)?",
+    x = "Avg Detections",
+    y = "Median Total Latency (ms)"
+  ) +
+  base_theme
+
+fig3 <- p_left + p_right +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+
+#save_figure(fig3, "fig3_efficiency_frontier", width = 16, height = 9)
+fig3
+```
+
+```{r fig4-decomposition}
+# Figure 4 — Latency Budget Decomposition (Section 6.4)
+
+
+offload_only <- df %>%
+  filter(mode == "Offload") %>%
+  select(model_label, resolution, fps_numeric, rsu_overhead_ms, network_ms, queue_wait_ms, inference_ms) %>%
+  pivot_longer(
+    cols = c(rsu_overhead_ms, network_ms, queue_wait_ms, inference_ms),
+    names_to = "component",
+    values_to = "time_ms"
+  ) %>%
+  mutate(
+    component = factor(component, 
+      levels = c("inference_ms", "queue_wait_ms", "network_ms", "rsu_overhead_ms"),
+      labels = c("Inference", "Queue Wait", "Network", "RSU Overhead"))
+  )
+
+latency_budget <- offload_only %>%
+  group_by(model_label, resolution, fps_numeric, component) %>%
+  summarise(mean_time = mean(time_ms, na.rm = TRUE), .groups = "drop")
+
+fig4 <- ggplot(latency_budget, aes(x = fps_numeric, y = mean_time, fill = component)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.7) +
+  facet_grid(resolution ~ model_label) +
+  scale_fill_manual(values = c(
+    "Inference" = "#27ae60",
+    "Queue Wait" = "#e74c3c", 
+    "Network" = "#f39c12",
+    "RSU Overhead" = "#3498db"
+  )) +
+  labs(
+    title = "Latency Budget Decomposition (Offload Mode)",
+    subtitle = "Green = useful compute | Red = congestion | Orange = network | Blue = capture/encode",
+    x = "Target FPS",
+    y = "Time (ms)",
+    fill = "Component"
+  ) +
+  base_theme
+
+#save_figure(fig4, "fig4_latency_decomposition", width = 16, height = 12)
+fig4
+
+```
+
+```{r fig5-heatmap}
+# Figure 5 — Decision Matrix Heatmap (Section 6.5)
+
+heatmap_data <- df %>%
+  group_by(model_label, fps_numeric, mode) %>%
+  summarise(median_latency_ms = median(total_latency_ms), .groups = "drop") %>%
+  pivot_wider(names_from = mode, values_from = median_latency_ms) %>%
+  mutate(offload_advantage_ms = Local - Offload)
+
+# Sanity check: flag negative cells
+if (any(heatmap_data$offload_advantage_ms < 0, na.rm = TRUE)) {
+  warning("Negative offload advantage detected — check data!")
+}
+
+fig5_heatmap <- ggplot(heatmap_data,
+    aes(x = fps_numeric, y = model_label, fill = offload_advantage_ms)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(
+    aes(label = sprintf("%d ms", round(offload_advantage_ms))),
+    fontface = "bold", size = 3.5
+  ) +
+  scale_fill_gradient(
+    low  = "#C8E6C9",
+    high = "#1B5E20",
+    name = "Offload Advantage (ms)"
+  ) +
+  scale_y_discrete(limits = rev) +
+  labs(
+    x = "Target Frame Rate (FPS)",
+    y = "Model Variant"
+  ) +
+  base_theme +
+  theme(
+    panel.grid = element_blank(),
+    axis.ticks = element_blank()
+  )
+
+#save_figure(fig5_heatmap, "fig5_decision_matrix", width = 14, height = 7)
+fig5_heatmap
+```
+
+```{r fig7-saturation}
+# Figure 7 — Zone Processor Saturation Levels (Section 6.6)
+
+saturation_data <- df %>%
+  filter(mode == "Offload") %>%
+  mutate(aggregate_fps = as.numeric(as.character(fps_numeric)) * 3) %>%
+  group_by(model_label, resolution, aggregate_fps) %>%
+  summarise(
+    mean_queue_wait_ms = mean(queue_wait_ms),
+    .groups = "drop"
+  )
+
+fig7_sat <- ggplot(saturation_data,
+    aes(x = aggregate_fps, y = mean_queue_wait_ms, color = model_label)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  geom_vline(
+    xintercept = 18,
+    linetype   = "dashed",
+    color      = "grey40",
+    linewidth  = 0.5
+  ) +
+  annotate("text",
+    x     = 19,
+    y     = max(saturation_data$mean_queue_wait_ms, na.rm = TRUE) * 0.9,
+    label = "Saturation\n(18 FPS)",
+    color = "grey40", size = 3, hjust = 0
+  ) +
+  facet_wrap(~ resolution, nrow = 1) +
+  scale_color_manual(values = model_colors, name = "Model") +
+  scale_x_continuous(breaks = c(3, 15, 30, 45)) +
+  labs(
+    x = "Aggregate FPS (3 RSUs combined)",
+    y = expression("Mean Queue Wait " * T[w] * " (ms)")
+  ) +
+  base_theme
+
+#save_figure(fig7_sat, "fig7_saturation", width = 16, height = 7)
+fig7_sat
+```
+

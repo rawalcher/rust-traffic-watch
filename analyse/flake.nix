@@ -6,7 +6,7 @@
       config.permittedInsecurePackages = [ "electron-38.8.4" ];
     };
     rEnv = pkgs.rstudioWrapper.override {
-      packages = with pkgs.rPackages; [ tidyverse data_table knitr rmarkdown ];
+      packages = with pkgs.rPackages; [ tidyverse data_table knitr rmarkdown Cairo gt webshot2];
     };
   in {
     devShells.x86_64-linux.default = pkgs.mkShell {
